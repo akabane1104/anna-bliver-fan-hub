@@ -1,0 +1,117 @@
+name: ${COMPOSE_PROJECT_NAME:-anna-bliver-fan-hub}
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?请在 .env 中设置 MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: anna_bliver_fan_hub
+      MYSQL_USER: fan_hub
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+    ports:
+      - "${MYSQL_BIND_ADDRESS:-127.0.0.1}:${MYSQL_PORT:-3306}:3306"
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./backend/src/config/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p\"$${MYSQL_ROOT_PASSWORD}\" --silent"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 5000
+      DB_HOST: mysql
+      DB_PORT: 3306
+      DB_USER: fan_hub
+      DB_PASSWORD: ${MYSQL_PASSWORD:?请在 .env 中设置 MYSQL_PASSWORD}
+      DB_NAME: anna_bliver_fan_hub
+      JWT_SECRET: ${JWT_SECRET:?请在 .env 中设置 JWT_SECRET}
+      JWT_EXPIRES_IN: ${JWT_EXPIRES_IN:-24h}
+      TRUST_PROXY: ${TRUST_PROXY:-1}
+      REQUEST_BODY_LIMIT: ${REQUEST_BODY_LIMIT:-4mb}
+      CORS_ORIGIN: ${PUBLIC_ORIGIN:-http://localhost:3000}
+      SITE_TITLE: ${SITE_TITLE:-小猪anna的秘密基地}
+      SITE_BRAND_MODE: ${SITE_BRAND_MODE:-image}
+      SITE_BRAND_TEXT: ${SITE_BRAND_TEXT:-小猪anna的秘密基地}
+      SITE_LOGO_URL: ${SITE_LOGO_URL:-/annapiggy-logo.png}
+      SITE_FAVICON_URL: ${SITE_FAVICON_URL:-/favicon.ico}
+      CREATOR_DISPLAY_NAME: ${CREATOR_DISPLAY_NAME:-小猪anna}
+      BILIBILI_UID: ${BILIBILI_UID:-}
+      SITE_HOME_TITLE: ${SITE_HOME_TITLE:-欢迎来到小猪anna的秘密基地}
+      SITE_HOME_SUBTITLE: ${SITE_HOME_SUBTITLE:-}
+      SITE_ICP_TEXT: ${SITE_ICP_TEXT:-}
+      SITE_PUBLIC_SECURITY_TEXT: ${SITE_PUBLIC_SECURITY_TEXT:-}
+      POINTS_ROOM_ID: ${POINTS_ROOM_ID:-}
+      POINTS_START_AT: ${POINTS_START_AT:-2026-01-01T00:00:00+08:00}
+      POINTS_COIN_PER_POINT: ${POINTS_COIN_PER_POINT:-100}
+      BOT_WS_URL: ${BOT_WS_URL:-}
+      BOT_WS_TOKEN: ${BOT_WS_TOKEN:-}
+      BILIBILI_COOKIE: ${BILIBILI_COOKIE:-}
+      ALIYUN_ACCESS_KEY_ID: ${ALIYUN_ACCESS_KEY_ID:-}
+      ALIYUN_ACCESS_KEY_SECRET: ${ALIYUN_ACCESS_KEY_SECRET:-}
+      ALIYUN_CAPTCHA_SCENE_ID: ${ALIYUN_CAPTCHA_SCENE_ID:-}
+      ALIYUN_CAPTCHA_PREFIX: ${ALIYUN_CAPTCHA_PREFIX:-}
+      TENCENT_SECRET_ID: ${TENCENT_SECRET_ID:-}
+      TENCENT_SECRET_KEY: ${TENCENT_SECRET_KEY:-}
+      SES_FROM_EMAIL: ${SES_FROM_EMAIL:-}
+      SES_FROM_NAME: ${SES_FROM_NAME:-小猪anna的秘密基地}
+      SES_TEMPLATE_ID: ${SES_TEMPLATE_ID:-}
+      SES_REDEMPTION_TEMPLATE_ID: ${SES_REDEMPTION_TEMPLATE_ID:-}
+      SES_REDEMPTION_TO_EMAIL: ${SES_REDEMPTION_TO_EMAIL:-}
+      SES_MARSHMALLOW_TEMPLATE_ID: ${SES_MARSHMALLOW_TEMPLATE_ID:-}
+      SES_MARSHMALLOW_TO_EMAIL: ${SES_MARSHMALLOW_TO_EMAIL:-}
+      DEMO_ADMIN_PASSWORD: ${DEMO_ADMIN_PASSWORD:-}
+    ports:
+      - "${BACKEND_BIND_ADDRESS:-127.0.0.1}:${BACKEND_PORT:-5000}:5000"
+    volumes:
+      - uploads_data:/app/uploads
+    depends_on:
+      mysql:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:5000/api/health').then((response) => { if (!response.ok) process.exit(1); }).catch(() => process.exit(1));"
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        REACT_APP_API_URL: /api
+        REACT_APP_ALIYUN_CAPTCHA_PREFIX: ""
+        REACT_APP_ALIYUN_CAPTCHA_SCENE_ID: ""
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_BIND_ADDRESS:-0.0.0.0}:${FRONTEND_PORT:-3000}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  mysql_data:
+  uploads_data:

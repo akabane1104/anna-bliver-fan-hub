@@ -14,6 +14,7 @@ yarn-error.log
 build/
 dist/
 uploads/
+backups/
 *.sql.gz
 *.sqlite*
 
