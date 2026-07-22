@@ -10,7 +10,7 @@ const COMPRESS_MAX_EDGE = 1600;
 const COMPRESSIBLE_IMAGE_TYPES = new Set(['image/jpeg', 'image/jpg', 'image/png', 'image/webp']);
 
 export function getImageUrl(url) {
-  if (!url) return '/annapiggy-logo.png';
+  if (!url) return '/branding/chengzhi-sweety-logo.png';
   if (/^https?:|^data:/i.test(url)) return url;
   return url.startsWith('/uploads/') ? `${API_ORIGIN}${url}` : url;
 }

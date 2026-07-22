@@ -322,7 +322,7 @@ function Playlists() {
         )}
       </div>
 
-      <p className="page-subtitle">每晚9点唱歌｜全职歌势猪猪猪｜有幸相遇，承蒙厚爱❤️</p>
+      <p className="page-subtitle">{siteSettings.playlistSubtitle}</p>
 
       {editingSong && (
         <EditSongModal

@@ -251,7 +251,7 @@ function SiteConfig() {
                       type="text"
                       value={formData.navbarLogoUrl}
                       onChange={(e) => handleChange('navbarLogoUrl', e.target.value)}
-                      placeholder="/annapiggy-logo.png 或 https://..."
+                      placeholder="/branding/chengzhi-sweety-logo.png 或 https://..."
                     />
                   </label>
                   <div className="site-config-logo-upload">

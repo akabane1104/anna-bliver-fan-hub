@@ -36,7 +36,7 @@ async function sendVerificationEmail(toEmail, name, code) {
   }
 
   // 发件人格式: "显示名称" <邮箱地址>
-  const fromName = process.env.SES_FROM_NAME || '小猪anna的秘密基地';
+  const fromName = process.env.SES_FROM_NAME || '橙吱_sweety的钢板批发小店';
   const fromEmail = process.env.SES_FROM_EMAIL;
   const fromAddress = `"${fromName}" <${fromEmail}>`;
 
@@ -75,7 +75,7 @@ async function sendRedemptionNotificationEmail(userName, prizeName) {
     return { success: false, skipped: true };
   }
 
-  const fromName = process.env.SES_FROM_NAME || '小猪anna的秘密基地';
+  const fromName = process.env.SES_FROM_NAME || '橙吱_sweety的钢板批发小店';
   const fromEmail = process.env.SES_FROM_EMAIL;
   const fromAddress = `"${fromName}" <${fromEmail}>`;
 
@@ -119,7 +119,7 @@ async function sendMarshmallowNotificationEmail({ sender, title, content }) {
     return { success: false, skipped: true };
   }
 
-  const fromName = process.env.SES_FROM_NAME || '小猪anna的秘密基地';
+  const fromName = process.env.SES_FROM_NAME || '橙吱_sweety的钢板批发小店';
   const fromEmail = process.env.SES_FROM_EMAIL;
   const fromAddress = `"${fromName}" <${fromEmail}>`;
 

@@ -78,3 +78,8 @@ Nginx 同源反向代理 `/api/` 与 `/uploads/` 到后端。MySQL 健康后才�
 
 - Phase 0.5 最小修复后，后端仍有 2 个腾讯 SDK/uuid 上游中危告警；前端完整开发工具链有 47 个告警，但 production audit 为 0。
 - 详细依赖路径、正式镜像边界、风险判断和后续策略见 `docs/DEPENDENCY_AUDIT.md`。
+- Favicon 仍沿用原文件，Phase 1A 不设计或替换；待取得正式品牌图标后单独处理。
+- `BOT_WS_URL`、`BOT_WS_TOKEN` 保持空白并关闭，不启用 Bot。
+- 原作者现有 Bot 直接写入原作者本地数据库，无法接入本项目的独立 Docker 数据库。
+- 当前 WebSocket 接口仅为未来公开版 Bot 或自建 Bot 预留。
+- 当前积分通过后台人工调整或 CSV 导入维护。

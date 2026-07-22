@@ -4,7 +4,7 @@ import BackButton from '../components/BackButton';
 
 const API_ORIGIN = (process.env.REACT_APP_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '');
 const imageUrl = (value) => {
-  if (!value) return '/annapiggy-logo.png';
+  if (!value) return '/branding/chengzhi-sweety-logo.png';
   if (/^https?:|^data:/i.test(value)) return value;
   return value.startsWith('/uploads/') ? `${API_ORIGIN}${value}` : value;
 };
@@ -16,7 +16,7 @@ const emptyAddress = { recipient_name: '', phone: '', province: '', city: '', di
 
 const prizeImages = (prize) => {
   const images = (prize?.images || []).filter((item) => item?.image_url);
-  return images.length ? images : [{ id: 'fallback', image_url: prize?.image_url || '/annapiggy-logo.png' }];
+  return images.length ? images : [{ id: 'fallback', image_url: prize?.image_url || '/branding/chengzhi-sweety-logo.png' }];
 };
 
 function PrizeGallery({ prize, onPreview, compact = false }) {

@@ -66,7 +66,7 @@ function Home() {
           </div>
         </a>}
         <h1 className="page-title">{siteSettings.homeTitle}</h1>
-        <p className="page-subtitle">{biliInfo?.sign || siteSettings.homeSubtitle}</p>
+        <p className="page-subtitle">{siteSettings.homeSubtitle?.trim() || biliInfo?.sign || ''}</p>
       </section>
       <section className="home-feature-grid home-feature-grid-original" aria-label="主要功能">
         {features.map((feature) => <Link key={feature.key} to={feature.to} className="home-feature-link">

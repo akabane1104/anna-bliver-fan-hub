@@ -46,7 +46,7 @@ function PlaylistDetail() {
 
       <div className="card" style={{ maxWidth: '800px', margin: '0 auto' }}>
         <img
-          src={playlist.image_url || '/annapiggy-logo.png'}
+          src={playlist.image_url || '/branding/chengzhi-sweety-logo.png'}
           alt={playlist.title}
           style={{ width: '100%', borderRadius: '8px', marginBottom: '1.5rem' }}
         />

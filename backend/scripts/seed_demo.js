@@ -26,8 +26,8 @@ async function run() {
     );
     await connection.query(
       `INSERT INTO prizes (name, description, cost, image_url, stock, delivery_type) VALUES
-       ('演示贴纸包', '虚构周边，仅供本地功能演示。', 120, '/annapiggy-logo.png', 30, 'physical'),
-       ('演示语音感谢', '虚构的数字奖品。', 80, '/annapiggy-logo.png', 100, 'virtual')`
+       ('演示贴纸包', '虚构周边，仅供本地功能演示。', 120, '/branding/chengzhi-sweety-logo.png', 30, 'physical'),
+       ('演示语音感谢', '虚构的数字奖品。', 80, '/branding/chengzhi-sweety-logo.png', 100, 'virtual')`
     );
     await connection.commit();
     console.log('Demo data created for demo-admin@example.invalid');

@@ -115,29 +115,33 @@ body {
 }
 
 .site-brand-image--image {
-  height: 30px;
+  height: 46px;
   width: auto;
   max-width: 300px;
   object-fit: contain;
 }
 
 .site-brand-image--icon {
-  width: 34px;
-  height: 34px;
-  border-radius: 9px;
-  object-fit: cover;
-  box-shadow: 0 0 0 1px var(--theme-border-soft);
+  width: auto;
+  height: 40px;
+  object-fit: contain;
 }
 
 .site-brand-text {
   color: var(--primary-purple);
-  font-size: 1.5rem;
+  font-size: 1.25rem;
   font-weight: 700;
   line-height: 1.2;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   max-width: 360px;
+}
+
+.site-brand--icon-text .site-brand-text {
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
 }
 
 .navbar-links {
@@ -194,18 +198,17 @@ body {
   }
 
   .site-brand-image--image {
-    height: 24px;
+    height: 38px;
     max-width: calc(100vw - 100px);
   }
 
   .site-brand-image--icon {
-    width: 30px;
-    height: 30px;
-    border-radius: 8px;
+    width: auto;
+    height: 32px;
   }
 
   .site-brand-text {
-    font-size: 1.15rem;
+    font-size: 1rem;
     max-width: calc(100vw - 135px);
   }
 
@@ -310,11 +313,12 @@ body {
 
 .btn-secondary {
   background: var(--light-purple);
-  color: var(--white);
+  color: var(--text-dark);
 }
 
 .btn-secondary:hover {
   background: var(--primary-purple);
+  color: var(--white);
 }
 
 .btn-outline {
@@ -4627,6 +4631,12 @@ textarea.form-input {
 }
 
 .menu-icon {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
   background: transparent;
   border: 0;
 }

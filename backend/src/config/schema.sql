@@ -1,3 +1,5 @@
+SET NAMES utf8mb4;
+
 CREATE DATABASE IF NOT EXISTS anna_bliver_fan_hub CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 USE anna_bliver_fan_hub;
 
@@ -293,4 +295,27 @@ VALUES ('网站歌单', '网站唯一歌曲列表', NULL);
 
 INSERT INTO settings (setting_key, setting_value) VALUES
   ('registration_open', 'true'),
-  ('site_playlist_id', CAST(LAST_INSERT_ID() AS CHAR));
+  ('site_playlist_id', CAST(LAST_INSERT_ID() AS CHAR)),
+  ('site_title', '橙吱_sweety的钢板批发小店'),
+  ('navbar_brand_mode', 'icon-text'),
+  ('navbar_brand_text', '橙吱_sweety'),
+  ('navbar_logo_url', '/branding/chengzhi-sweety-logo.png'),
+  ('favicon_url', '/favicon.ico'),
+  ('creator_display_name', '橙吱_sweety'),
+  ('bilibili_uid', '24856973'),
+  ('home_title', '欢迎各位霸总来到橙吱钢板批发小店'),
+  ('home_subtitle', '养成系全职歌势~'),
+  ('playlist_title', '橙吱_sweety的歌单'),
+  ('theme_primary_color', '#C04D00'),
+  ('theme_light_color', '#FF8A00'),
+  ('theme_dark_color', '#803200'),
+  ('theme_background_color', '#FFF8EF'),
+  ('theme_background_accent_color', '#FFE0B2'),
+  ('theme_text_dark_color', '#362217'),
+  ('theme_text_light_color', '#6E5747'),
+  ('theme_border_soft_color', '#F0BF83'),
+  ('theme_surface_subtle_color', '#ffffff'),
+  ('theme_surface_muted_color', '#FFF0DA'),
+  ('theme_success_color', '#2E7D57'),
+  ('theme_warning_color', '#9A5700'),
+  ('theme_danger_color', '#C43D4D');

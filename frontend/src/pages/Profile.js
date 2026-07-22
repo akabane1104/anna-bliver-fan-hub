@@ -17,7 +17,7 @@ const API_ORIGIN = (process.env.REACT_APP_API_URL || 'http://localhost:5000/api'
 
 const formatNumber = (value) => Number(value || 0).toLocaleString();
 const formatDate = (value) => value && !Number.isNaN(new Date(value).getTime()) ? new Date(value).toLocaleString() : '-';
-const imageUrl = (value) => !value ? '/annapiggy-logo.png' : /^https?:|^data:/i.test(value) ? value : `${API_ORIGIN}${value}`;
+const imageUrl = (value) => !value ? '/branding/chengzhi-sweety-logo.png' : /^https?:|^data:/i.test(value) ? value : `${API_ORIGIN}${value}`;
 const roleLabel = (role) => ({ admin: '管理员', premium: '主播', user: '普通用户' }[role] || role || '-');
 const statusLabel = (status) => ({ pending: '处理中', completed: '已完成', cancelled: '已取消', mixed: '部分处理' }[status] || status || '-');
 const deliveryLabel = (value) => value === 'virtual' ? '虚拟商品' : '实体商品';
