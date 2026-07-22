@@ -23,7 +23,7 @@ Node.js 与 npm 只用于宿主机测试；容器构建固定使用现有 `packa
 
 启动完成后访问：
 
-- 前端网站：`http://localhost:3000`
+- 前端网站：`http://localhost:3000`，默认仅绑定 `127.0.0.1`
 - 后端健康检查：`http://localhost:5000/api/health`
 - MySQL：`127.0.0.1:3306`，仅绑定本机回环地址
 
@@ -130,3 +130,5 @@ docker compose --env-file .env logs --tail 200 frontend
 ```
 
 若 `3000`、`5000` 或 `3306` 已被占用，在 `.env` 中修改对应的 `FRONTEND_PORT`、`BACKEND_PORT`、`MYSQL_PORT` 后重新启动。修改 `FRONTEND_PORT` 时必须同时把 `PUBLIC_ORIGIN` 改为相同端口；不要修改容器内部端口。
+
+`FRONTEND_BIND_HOST` 默认并建议保持为 `127.0.0.1`。未来公开部署应通过 HTTPS 反向代理访问，不应直接把前端、后端或 MySQL 的本机开发端口暴露到公网。

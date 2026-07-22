@@ -12,7 +12,7 @@
 | --- | --- | --- | --- |
 | `mysql` | `mysql:8.0` | `127.0.0.1:3306` | `mysql_data` |
 | `backend` | `backend/Dockerfile`，Node.js 20 + Express | `127.0.0.1:5000` | `uploads_data` |
-| `frontend` | `frontend/Dockerfile`，React 生产构建 + Nginx | `0.0.0.0:3000` | 无状态 |
+| `frontend` | `frontend/Dockerfile`，React 生产构建 + Nginx | `127.0.0.1:3000` | 无状态 |
 
 Nginx 同源反向代理 `/api/` 与 `/uploads/` 到后端。MySQL 健康后才启动后端，后端健康后才启动前端；三个服务都配置了健康检查和 `unless-stopped` 重启策略。
 
@@ -59,7 +59,7 @@ Nginx 同源反向代理 `/api/` 与 `/uploads/` 到后端。MySQL 健康后才�
 上线前至少调整：
 
 - `PUBLIC_ORIGIN=https://实际域名`
-- 若外层还有反向代理，将 `FRONTEND_BIND_ADDRESS` 设为 `127.0.0.1`，并按真实代理跳数设置 `TRUST_PROXY`
+- 对外服务应通过 HTTPS 反向代理访问，并保持 `FRONTEND_BIND_HOST=127.0.0.1`；不要直接把本机开发端口暴露到公网，并按真实代理跳数设置 `TRUST_PROXY`
 - 配置 HTTPS、防火墙、主机级备份、日志轮转与监控
 - 用安全通道配置生产密钥，不复用示例值或测试管理员密码
 
@@ -68,7 +68,7 @@ Nginx 同源反向代理 `/api/` 与 `/uploads/` 到后端。MySQL 健康后才�
 ## 安全与维护注意事项
 
 - `.env.example` 只包含占位符；本机 `.env` 由启动脚本生成随机密钥并受 `.gitignore` 保护。
-- 后端与 MySQL 默认只绑定 `127.0.0.1`，前端默认监听 `3000`。
+- 前端、后端与 MySQL 默认都只绑定 `127.0.0.1`；前端默认监听 `3000`。
 - 备份是敏感数据，应加密、限制访问并定期演练还原。
 - 不要运行带 `--volumes` 的 Compose 删除命令，除非已确认要永久清空数据。
 - 更新代码前先备份，再执行 npm 测试、前端生产构建和 Docker 镜像重建。
