@@ -169,3 +169,22 @@ synthetic fixture -> signer -> loopback HTTP -> Live Event API
 ```
 
 该工具不加入正式 Docker Compose，不改变现有三个服务的启动方式，不连接 B站、Cloudflare 或远程域名。未来沉默 listener 可以重用事件工厂、签名契约与脱敏边界，但必须独立实现官方连接、心跳和重连。
+
+## Phase 4E 沉默 Listener 离线骨架
+
+Phase 4E 在 `services/bilibili-listener` 建立独立进程边界，但尚未实现任何正式 B站网络 Adapter：
+
+```text
+future official adapter (not implemented)
+        |
+        | decoded source event
+        v
+listener supervisor -> mapper -> bounded FIFO -> signed loopback delivery
+                                                     |
+                                                     v
+                                     Live Control Event API v1
+```
+
+Listener 核心将来源连接重连与 Backend 投递重试完全分离，以 connection generation 排除旧 callback，并使用有界内存队列、显式 backpressure、白名单日志和限时 graceful shutdown。Mapper 直接调用 Backend 现有 Zod validator，不维护第二套事件 Schema；事件只序列化一次，投递重试保持 `event_id` 与 raw body 不变。
+
+当前 Synthetic Adapter 仅供完全离线的 dry-run 与隔离测试使用，不是 B站官方封包实现。`start` 模式固定返回 `bilibili_adapter_not_implemented`，不会回退到合成来源。Listener 不发送弹幕、不操作直播间、不处理点数、不解析点歌命令、不连接 MySQL，也不加入正式 Docker Compose。详细安全边界见 [B站沉默 Listener 文档](BILIBILI_LISTENER.md)。
