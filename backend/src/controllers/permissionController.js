@@ -9,7 +9,8 @@ const TYPES = [
   [PERMISSIONS.MARSHMALLOW_MANAGE, '棉花糖管理'],
   [PERMISSIONS.PRIZE_MANAGE, '商城管理'],
   [PERMISSIONS.POINTS_MANAGE, '积分管理'],
-  [PERMISSIONS.SITE_CONFIG_MANAGE, '网站配置']
+  [PERMISSIONS.SITE_CONFIG_MANAGE, '网站配置'],
+  [PERMISSIONS.LIVE_CONTROL_MANAGE, '点歌控制']
 ].map(([key, name]) => ({ key, name }));
 
 function requireAdmin(req, res) {

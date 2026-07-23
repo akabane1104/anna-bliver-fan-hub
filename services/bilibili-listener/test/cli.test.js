@@ -17,10 +17,15 @@ function outputCollector() {
 }
 
 test('CLI accepts only start/dry-run and the json switch', () => {
-  assert.deepEqual(parseArguments(['dry-run']), { mode: 'dry-run', json: false });
+  assert.deepEqual(parseArguments(['dry-run']), {
+    mode: 'dry-run',
+    json: false,
+    source: null
+  });
   assert.deepEqual(parseArguments(['dry-run', '--json']), {
     mode: 'dry-run',
-    json: true
+    json: true,
+    source: null
   });
   assert.throws(() => parseArguments(['run']), { code: 'invalid_listener_mode' });
   assert.throws(() => parseArguments(['dry-run', '--fixture', 'external.json']), {

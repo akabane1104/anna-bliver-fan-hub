@@ -372,6 +372,7 @@ GET /api/song-requests/current?site_id=main-site&room_id=123456
 | 方法与路径 | 用途 |
 | --- | --- |
 | `POST /api/live-control/sessions` | 建立 `draft` 场次 |
+| `GET /api/live-control/sessions/recoverable` | 恢复控制台可继续操作的 active 场次或唯一 draft |
 | `GET /api/live-control/sessions/current` | 按明确 `site_id`、`room_id` 查询当前场次 |
 | `POST /api/live-control/sessions/:publicId/open` | 开启 draft 或恢复 paused 场次 |
 | `POST /api/live-control/sessions/:publicId/pause` | 暂停 open 场次 |
@@ -402,6 +403,10 @@ GET /api/song-requests/current?site_id=main-site&room_id=123456
 
 状态变更与重排请求必须提交当前 `expected_version`。过期版本返回 `409 version_conflict`。重排列表必须恰好包含该场次所有 `needs_match` 与 `queued` 请求，各一次；不能包含 active、终态、重复项或其他场次请求。
 
+同一 Backend 进程内，相同 target 的 draft 建立与相同 session 的状态变更在进入第一个异步数据库步骤前登记为单次执行。相同操作共享同一结果；同一 session 上不同的并发操作返回 `409 session_operation_pending`。进程间状态变更仍由事务行锁、`expected_version` 和既有 active session 唯一约束裁决；本机制不宣称为 draft 提供新的跨进程唯一约束。
+
+`sessions/recoverable` 以 Backend 数据为权威来源：存在 open/paused 场次时只返回 active 场次；否则只允许恢复一个 draft。多个 draft 返回 `409 ambiguous_draft_sessions`，closed 等终态不会返回。再次建立相同 target 时，既有唯一 draft 会原样返回，不创建第二份草稿。
+
 常用稳定错误码：
 
 | HTTP | `code` | 含义 |
@@ -413,6 +418,8 @@ GET /api/song-requests/current?site_id=main-site&room_id=123456
 | `409` | `idempotency_key_conflict` | 幂等键已用于不同请求 |
 | `409` | `version_conflict` | 乐观并发版本过期 |
 | `409` | `active_session_exists` | 同一站点与房间已有 open/paused 场次 |
+| `409` | `ambiguous_draft_sessions` | 可恢复范围内存在多个 draft，必须人工确认 |
+| `409` | `session_operation_pending` | 同一场次正在执行另一项状态操作 |
 | `409` | `invalid_session_transition` | 场次状态转换非法 |
 | `409` | `invalid_request_transition` | 请求状态转换非法 |
 | `409` | `fulfillment_type_required` | 完成前未选择 sung 或 played |
@@ -430,3 +437,33 @@ GET /api/song-requests/current?site_id=main-site&room_id=123456
 模拟器只接受 `http://127.0.0.1`、`http://localhost` 和受支持的 IPv6 loopback，不接受 preview、正式域名或局域网地址。Secret 只能由进程环境变量提供，不接受网站 Token、CLI 参数或 fixture 中的值。完整使用方法与场景见 [LIVE_EVENT_SIMULATOR.md](LIVE_EVENT_SIMULATOR.md)。
 
 Phase 4D 没有新增公开 API，也没有改变点歌、幂等、积分或错误响应规则。
+
+## Phase 4G-B 直播管理只读 API
+
+以下接口要求网站登录，并由既有权限中间件确认用户为管理员或具有
+`live_control.manage` 权限：
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /api/live-control/status` | 分别读取 Backend、数据库、场次、Listener、B站连接和事件入站状态 |
+| `GET /api/live-control/events` | 分页查询 `live_events` 的管理端安全 DTO |
+
+事件查询支持 `query`、`event_type`、`status`、`source`、`session`、
+`start`、`end`、`page` 和 `limit`。`limit` 最大为 100；排序固定为
+`received_at DESC` 加内部稳定键，不接受客户端 SQL 排序表达式。非法筛选返回
+`400 invalid_live_event_query`。
+
+状态接口缺少权威 Listener 运行时来源时返回 `unavailable`，并将 B站 API 与
+WSS 标记为 `unknown`。它不会根据 open session 或历史事件推测连接状态，也
+不会为了读取状态而建立外部连接。
+
+事件响应采用 Backend 明确 allowlist，不包含上游 `event_id`、`open_id`、数字
+UID、事件正文、原始／未筛选 payload、HMAC、Secret、Token、Cookie 或数据库
+内部 ID。`event_ref` 是 `ler:v1:` 前缀的专用 HMAC 去识别化引用，不是鉴权
+token；专用密钥缺失或不合格时，实际事件序列化入口安全失败。当前数据库只保存
+`recorded` 事件；
+`duplicate`、`event_id_conflict` 和未持久化失败是入站 ACK，不会伪造成独立
+历史记录，legacy replay 仍由上游 `event_id` 与 `content_hash` 判定，不依赖
+`event_ref`。状态页使用固定行数的 SQL 聚合；事件时间排序和最近事件查询由
+`(received_at, id)` 索引支持。完整契约与页面更新规则见
+[直播状态与事件记录后台](LIVE_STATUS_AND_EVENTS_UI.md)。

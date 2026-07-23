@@ -12,6 +12,10 @@
     "test": "node --test test/*.test.js",
     "seed:demo": "node scripts/seed_demo.js",
     "admin:promote": "node scripts/promote_admin.js",
+    "db:migrate:status": "node scripts/schema-migrate.js status",
+    "db:migrate:preflight": "node scripts/schema-migrate.js preflight",
+    "db:migrate:apply": "node scripts/schema-migrate.js apply",
+    "db:migrate:postcheck": "node scripts/schema-migrate.js postcheck",
     "check": "node --check src/server.js"
   },
   "license": "GPL-3.0-or-later",

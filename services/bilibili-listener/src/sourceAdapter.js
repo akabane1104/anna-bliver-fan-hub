@@ -1,4 +1,7 @@
 const { listenerError } = require('./errors');
+const {
+  assertOfficialWssEvidenceVerified
+} = require('./officialWssUrl');
 
 const REQUIRED_ADAPTER_METHODS = Object.freeze([
   'connect',
@@ -25,8 +28,12 @@ function assertSourceAdapter(adapter) {
   return adapter;
 }
 
-function createProductionAdapter() {
-  throw listenerError('bilibili_adapter_not_implemented');
+function createProductionAdapter({ source, ...options } = {}) {
+  if (source !== 'bilibili-official') {
+    throw listenerError('bilibili_adapter_not_implemented');
+  }
+  void options;
+  return assertOfficialWssEvidenceVerified();
 }
 
 module.exports = {

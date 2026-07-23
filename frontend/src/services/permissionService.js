@@ -29,7 +29,8 @@ const permissionService = {
     MARSHMALLOW_MANAGE: 'marshmallow.manage',
     PRIZE_MANAGE: 'prize.manage',
     POINTS_MANAGE: 'points.manage',
-    SITE_CONFIG_MANAGE: 'site_config.manage'
+    SITE_CONFIG_MANAGE: 'site_config.manage',
+    LIVE_CONTROL_MANAGE: 'live_control.manage'
   }
 };
 

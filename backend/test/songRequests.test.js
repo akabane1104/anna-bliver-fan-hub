@@ -14,6 +14,7 @@ const {
 } = require('../src/services/songRequestStateMachine');
 const { createSongRequestService } = require('../src/services/songRequestService');
 const { createSongRequestController } = require('../src/controllers/songRequestController');
+const { createLiveControlController } = require('../src/controllers/liveControlController');
 const { createSongRequestRouter } = require('../src/routes/songRequests');
 const { createLiveControlRouter } = require('../src/routes/liveControl');
 
@@ -314,6 +315,9 @@ test('website request API uses server identity and reports accepted or duplicate
       },
       async getRequest() {
         return safeRequest;
+      },
+      async getPublicRequest() {
+        return safeRequest;
       }
     }
   });
@@ -421,6 +425,37 @@ test('live-control routes require authorization and expose no history mutation r
     method: 'DELETE'
   });
   assert.equal(historyMutation.status, 404);
+});
+
+test('recoverable sessions route returns only the service-selected authority state', async (t) => {
+  const recovered = {
+    public_id: '14770010-286b-4324-bff5-3908af212b47',
+    site_id: TARGET.site_id,
+    room_id: TARGET.room_id,
+    playlist_id: 1,
+    title: 'Synthetic Draft',
+    status: 'draft',
+    version: 2
+  };
+  let calls = 0;
+  const controller = createLiveControlController({
+    sessionService: {
+      async listRecoverable() {
+        calls += 1;
+        return [recovered];
+      }
+    }
+  });
+  const baseUrl = await createHarness(t, '/api/live-control', createLiveControlRouter({
+    controller,
+    authenticate: (req, res, next) => next(),
+    authorize: (req, res, next) => next()
+  }));
+
+  const response = await fetch(`${baseUrl}/sessions/recoverable`);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { sessions: [recovered] });
+  assert.equal(calls, 1);
 });
 
 test('new song-request modules do not call points, legacy bot, OBS, or player controls', () => {

@@ -345,6 +345,15 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
       idempotencyKey: 'phase4c-website-request'
     });
     assert.equal(websiteDuplicate.duplicate, true);
+    const websiteBySongId = await requestService.createWebsiteRequest({
+      song_id: songIds['年轮']
+    }, {
+      userId: actorUserId,
+      idempotencyKey: 'phase4g-website-song-id'
+    });
+    assert.equal(websiteBySongId.duplicate, false);
+    assert.equal(websiteBySongId.request.source, 'website');
+    assert.equal(websiteBySongId.request.matched_song_id, songIds['年轮']);
     await expectServiceError(
       requestService.createWebsiteRequest({ ...TARGET, query: 'FANCY' }, {
         userId: actorUserId,
@@ -636,6 +645,36 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
       foreignSession.version
     );
 
+    const concurrentActiveQueue = await requestService.getSessionRequests(session.public_id);
+    const concurrentActiveCandidates = concurrentActiveQueue.requests
+      .filter(({ status }) => status === 'queued')
+      .slice(0, 2);
+    assert.equal(concurrentActiveCandidates.length, 2);
+    const concurrentActiveResults = await Promise.allSettled(
+      concurrentActiveCandidates.map((candidate) => requestService.transitionRequest(
+        candidate.public_id,
+        'active',
+        { expected_version: candidate.version },
+        actorUserId
+      ))
+    );
+    assert.deepEqual(
+      concurrentActiveResults.map(({ status }) => status).sort(),
+      ['fulfilled', 'rejected']
+    );
+    assert.equal(
+      concurrentActiveResults.find(({ status }) => status === 'rejected').reason.code,
+      'active_request_exists'
+    );
+    const concurrentlyActivated = concurrentActiveResults
+      .find(({ status }) => status === 'fulfilled').value;
+    await requestService.transitionRequest(
+      concurrentlyActivated.public_id,
+      'skipped',
+      { expected_version: concurrentlyActivated.version },
+      actorUserId
+    );
+
     const beforeActiveMix = await requestService.getSessionRequests(session.public_id);
     const activeCandidate = beforeActiveMix.requests.find(({ status }) => status === 'queued');
     const activated = await requestService.transitionRequest(
@@ -668,6 +707,15 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
 
     const historyCount = await requestService.getHistoryCount(stateRequest.public_id);
     assert.ok(historyCount >= 4);
+    const historyPage = await requestService.getHistory({
+      query: '年轮',
+      source: 'website',
+      page: 1,
+      limit: 5
+    });
+    assert.ok(historyPage.requests.length > 0);
+    assert.ok(historyPage.requests.length <= 5);
+    assert.equal(historyPage.pagination.page, 1);
     const [reorderHistory] = await pool.query(
       `SELECT COUNT(*) AS count
        FROM song_request_history

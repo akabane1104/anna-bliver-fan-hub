@@ -2,12 +2,13 @@
 
 const { safeErrorCode, listenerError } = require('./errors');
 const { runDryRun } = require('./dryRun');
-const { createProductionAdapter } = require('./sourceAdapter');
+const { createProductionRuntime } = require('./productionRuntime');
 
 function parseArguments(argv) {
   const [mode, ...rest] = argv;
   if (!['dry-run', 'start'].includes(mode)) throw listenerError('invalid_listener_mode');
   let json = false;
+  let source = null;
   for (const token of rest) {
     if (token === '--json') {
       if (json) throw listenerError('duplicate_argument');
@@ -17,9 +18,23 @@ function parseArguments(argv) {
     if (token === '--secret' || token.startsWith('--secret=')) {
       throw listenerError('secret_argument_forbidden');
     }
+    if (
+      token === '--access-key-secret' ||
+      token.startsWith('--access-key-secret=') ||
+      token === '--identity-code' ||
+      token.startsWith('--identity-code=')
+    ) {
+      throw listenerError('secret_argument_forbidden');
+    }
+    if (token === '--source=bilibili-official') {
+      if (source) throw listenerError('duplicate_argument');
+      source = 'bilibili-official';
+      continue;
+    }
     throw listenerError('invalid_argument');
   }
-  return { mode, json };
+  if (mode === 'dry-run' && source) throw listenerError('invalid_argument');
+  return { mode, json, source };
 }
 
 function printResult(value, json, stdout = process.stdout) {
@@ -74,16 +89,45 @@ async function main(
   argv = process.argv.slice(2),
   {
     stdout = process.stdout,
+    processLike = process,
+    env = process.env,
     dryRun = runDryRun,
-    productionAdapterFactory = createProductionAdapter
+    productionRuntimeFactory = createProductionRuntime
   } = {}
 ) {
   const wantsJson = argv.includes('--json');
   try {
     const options = parseArguments(argv);
     if (options.mode === 'start') {
-      productionAdapterFactory();
-      throw listenerError('bilibili_adapter_not_implemented');
+      const runtime = productionRuntimeFactory({
+        source: options.source,
+        env
+      });
+      let resolveStopped;
+      const stopped = new Promise((resolve) => {
+        resolveStopped = resolve;
+      });
+      const handlers = installShutdownHandlers({
+        processLike,
+        async shutdown() {
+          await runtime.stop();
+          resolveStopped();
+        }
+      });
+      try {
+        await runtime.start();
+        printResult({
+          status: 'running',
+          source: options.source
+        }, options.json, stdout);
+        await stopped;
+        return Number(processLike.exitCode || 0);
+      } catch (error) {
+        await runtime.stop().catch(() => {});
+        throw error;
+      } finally {
+        handlers.dispose();
+      }
     }
     const result = await dryRun();
     printResult(result, options.json, stdout);

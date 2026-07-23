@@ -12,7 +12,11 @@ function createLiveControlRouter({
   const router = express.Router();
   router.use(authenticate, authorize);
 
+  router.get('/status', asyncHandler(controller.liveStatus));
+  router.get('/events', asyncHandler(controller.liveEvents));
   router.post('/sessions', asyncHandler(controller.createSession));
+  router.get('/sessions/active', asyncHandler(controller.activeSessions));
+  router.get('/sessions/recoverable', asyncHandler(controller.recoverableSessions));
   router.get('/sessions/current', asyncHandler(controller.currentSession));
   router.post('/sessions/:publicId/open', asyncHandler(controller.openSession));
   router.post('/sessions/:publicId/pause', asyncHandler(controller.pauseSession));
@@ -22,6 +26,7 @@ function createLiveControlRouter({
   router.put('/sessions/:publicId/reorder', asyncHandler(controller.reorder));
 
   router.get('/requests/observed', asyncHandler(controller.observedRequests));
+  router.get('/history', asyncHandler(controller.history));
   router.post('/requests', asyncHandler(controller.createManualRequest));
   router.post('/requests/:publicId/assign', asyncHandler(controller.assignRequest));
   router.post('/requests/:publicId/match', asyncHandler(controller.matchRequest));

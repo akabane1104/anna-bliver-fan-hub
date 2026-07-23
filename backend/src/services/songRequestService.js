@@ -106,6 +106,19 @@ function requestForManagement(row, matchedSong = null) {
   };
 }
 
+function requestForPublic(row, matchedSong = null) {
+  return {
+    public_id: row.public_id,
+    requested_title: row.requested_title,
+    matched_song: matchedSong,
+    requester_display_name: row.requester_display_name || null,
+    status: row.status,
+    fulfillment_type: row.fulfillment_type,
+    queue_order: row.queue_order == null ? null : String(row.queue_order),
+    requested_at: row.requested_at
+  };
+}
+
 function matchFields(result) {
   return {
     matchedSongId: result.song?.id || null,
@@ -216,6 +229,37 @@ async function getMatchedSong(queryable, songId) {
     [songId]
   );
   return songs[0] ? publicSong(songs[0]) : null;
+}
+
+async function resolveWebsiteSessionForUpdate(connection, input) {
+  if (input.site_id && input.room_id) {
+    return findOpenSessionForUpdate(connection, input.site_id, input.room_id);
+  }
+
+  const [songs] = await connection.query(
+    'SELECT id, playlist_id FROM songs WHERE id = ? LIMIT 1',
+    [input.song_id]
+  );
+  if (!songs.length) {
+    throw new SongRequestError(404, 'song_not_found', '歌曲不存在');
+  }
+  const [sessions] = await connection.query(
+    `SELECT id, public_id, site_id, room_id, playlist_id, title, status, version
+     FROM live_sessions
+     WHERE playlist_id = ? AND status = 'open'
+     ORDER BY started_at DESC, id DESC
+     LIMIT 2
+     FOR UPDATE`,
+    [songs[0].playlist_id]
+  );
+  if (sessions.length > 1) {
+    throw new SongRequestError(
+      409,
+      'ambiguous_open_session',
+      '当前有多个开放场次，请稍后再试'
+    );
+  }
+  return sessions[0] || null;
 }
 
 function createSongRequestService({ pool = database } = {}) {
@@ -335,11 +379,7 @@ function createSongRequestService({ pool = database } = {}) {
             };
           }
 
-          const session = await findOpenSessionForUpdate(
-            connection,
-            input.site_id,
-            input.room_id
-          );
+          const session = await resolveWebsiteSessionForUpdate(connection, input);
           if (!session) {
             throw new SongRequestError(409, 'no_open_session', '当前没有开放中的直播场次');
           }
@@ -728,11 +768,26 @@ function createSongRequestService({ pool = database } = {}) {
         }
         if (toStatus === 'active') {
           const [sessions] = await connection.query(
-            `SELECT status FROM live_sessions WHERE id = ? LIMIT 1 FOR UPDATE`,
+            `SELECT id, status FROM live_sessions WHERE id = ? LIMIT 1 FOR UPDATE`,
             [request.session_id]
           );
           if (!sessions.length || sessions[0].status === 'closed') {
             throw new SongRequestError(409, 'session_closed', '已关闭的场次不能开始处理请求');
+          }
+          const [activeRequests] = await connection.query(
+            `SELECT id
+             FROM song_requests
+             WHERE session_id = ? AND status = 'active' AND id <> ?
+             LIMIT 1
+             FOR UPDATE`,
+            [request.session_id, request.id]
+          );
+          if (activeRequests.length) {
+            throw new SongRequestError(
+              409,
+              'active_request_exists',
+              '当前已有正在处理的歌曲'
+            );
           }
         }
         const previousQueueOrder = request.queue_order;
@@ -842,13 +897,27 @@ function createSongRequestService({ pool = database } = {}) {
     },
 
     async getCurrentQueue(siteId, roomId) {
+      const params = [];
+      let targetWhere = '';
+      if (siteId && roomId) {
+        targetWhere = 'AND site_id = ? AND room_id = ?';
+        params.push(siteId, roomId);
+      }
       const [sessions] = await pool.query(
         `SELECT id, public_id, title, status
          FROM live_sessions
-         WHERE site_id = ? AND room_id = ? AND status IN ('open','paused')
-         LIMIT 1`,
-        [siteId, roomId]
+         WHERE status IN ('open','paused') ${targetWhere}
+         ORDER BY started_at DESC, id DESC
+         LIMIT 2`,
+        params
       );
+      if (!siteId && sessions.length > 1) {
+        throw new SongRequestError(
+          409,
+          'ambiguous_active_session',
+          '当前有多个直播场次，无法确定公开队列'
+        );
+      }
       if (!sessions.length) return { session: null, requests: [] };
       const session = sessions[0];
       const [rows] = await pool.query(
@@ -885,6 +954,94 @@ function createSongRequestService({ pool = database } = {}) {
           queue_order: row.queue_order == null ? null : String(row.queue_order),
           requested_at: row.requested_at
         }))
+      };
+    },
+
+    async getHistory({ query = '', status, source, page = 1, limit = 20 } = {}) {
+      const conditions = [];
+      const params = [];
+      if (query) {
+        const pattern = `%${query.replace(/[\\%_]/g, '\\$&')}%`;
+        conditions.push(`(
+          sr.requested_title LIKE ? ESCAPE '\\\\' OR
+          s.title LIKE ? ESCAPE '\\\\' OR
+          s.artist LIKE ? ESCAPE '\\\\' OR
+          sr.requester_display_name LIKE ? ESCAPE '\\\\'
+        )`);
+        params.push(pattern, pattern, pattern, pattern);
+      }
+      if (status) {
+        conditions.push('sr.status = ?');
+        params.push(status);
+      }
+      if (source) {
+        conditions.push('sr.source = ?');
+        params.push(source);
+      }
+      const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
+      const [[countRow]] = await pool.query(
+        `SELECT COUNT(*) AS count
+         FROM song_requests sr
+         LEFT JOIN songs s ON s.id = sr.matched_song_id
+         ${where}`,
+        params
+      );
+      const offset = (page - 1) * limit;
+      const [rows] = await pool.query(
+        `SELECT sr.public_id, sr.requested_title, sr.requester_display_name,
+                sr.source, sr.status, sr.fulfillment_type, sr.requested_at,
+                sr.activated_at, sr.completed_at, s.title AS song_title,
+                s.artist AS song_artist, s.duration AS song_duration,
+                (
+                  SELECT h.created_at
+                  FROM song_request_history h
+                  WHERE h.request_id = sr.id
+                  ORDER BY h.id DESC
+                  LIMIT 1
+                ) AS last_action_at,
+                (
+                  SELECT u.username
+                  FROM song_request_history h
+                  LEFT JOIN users u ON u.id = h.actor_user_id
+                  WHERE h.request_id = sr.id
+                  ORDER BY h.id DESC
+                  LIMIT 1
+                ) AS last_actor_display_name
+         FROM song_requests sr
+         LEFT JOIN songs s ON s.id = sr.matched_song_id
+         ${where}
+         ORDER BY sr.requested_at DESC, sr.id DESC
+         LIMIT ? OFFSET ?`,
+        [...params, limit, offset]
+      );
+      const total = Number(countRow.count);
+      return {
+        requests: rows.map((row) => ({
+          public_id: row.public_id,
+          requested_title: row.requested_title,
+          matched_song: row.song_title
+            ? {
+              title: row.song_title,
+              artist: row.song_artist,
+              duration: row.song_duration || null
+            }
+            : null,
+          requester_display_name: row.requester_display_name || null,
+          source: row.source,
+          status: row.status,
+          fulfillment_type: row.fulfillment_type,
+          requested_at: row.requested_at,
+          activated_at: row.activated_at,
+          completed_at: row.completed_at,
+          last_action_at: row.last_action_at,
+          last_actor_display_name: row.last_actor_display_name || null
+        })),
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit))
+        }
       };
     },
 
@@ -1002,6 +1159,12 @@ function createSongRequestService({ pool = database } = {}) {
       const request = await findRequestByPublicId(pool, requestPublicId);
       if (!request) throw new SongRequestError(404, 'request_not_found', '点歌请求不存在');
       return requestForManagement(request, await getMatchedSong(pool, request.matched_song_id));
+    },
+
+    async getPublicRequest(requestPublicId) {
+      const request = await findRequestByPublicId(pool, requestPublicId);
+      if (!request) throw new SongRequestError(404, 'request_not_found', '点歌请求不存在');
+      return requestForPublic(request, await getMatchedSong(pool, request.matched_song_id));
     }
   };
 
@@ -1017,6 +1180,8 @@ module.exports = {
   findRequestByPublicId,
   insertHistory,
   nextQueueOrder,
+  requestForPublic,
   requestForManagement,
+  resolveWebsiteSessionForUpdate,
   toMysqlUtcDateTime
 };

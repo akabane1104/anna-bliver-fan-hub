@@ -1,9 +1,14 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import readXlsxFile from 'read-excel-file';
-import { playlistService, authService, permissionService } from '../services';
+import { playlistService, authService, permissionService, songRequestService } from '../services';
 import BackButton from '../components/BackButton';
-import { useFeedback } from '../components/FeedbackProvider';
+import PublicSongQueue from '../components/PublicSongQueue';
+import { InlineAlert, useFeedback } from '../components/FeedbackProvider';
 import { useSiteSettings } from '../context/SiteSettingsContext';
+import {
+  createIdempotencyKey,
+  requestErrorMessage as songRequestErrorMessage
+} from '../utils/songRequestUi';
 
 const requestErrorMessage = (fallback, error) => {
   const detail = error?.response?.data?.message;
@@ -17,7 +22,10 @@ function Playlists() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState('');
   const [selectedTag, setSelectedTag] = useState('All');
+  const [isSearching, setIsSearching] = useState(false);
+  const [catalogTotal, setCatalogTotal] = useState(0);
   const [showScrollTop, setShowScrollTop] = useState(false);
   const [isScrolled, setIsScrolled] = useState(false);
   const [navbarHeight, setNavbarHeight] = useState(0);
@@ -31,26 +39,29 @@ function Playlists() {
   const [isBatchAdding, setIsBatchAdding] = useState(false);
   const [isManagingTags, setIsManagingTags] = useState(false);
   const [allTags, setAllTags] = useState([]);
+  const [queueData, setQueueData] = useState(null);
+  const [queueLoading, setQueueLoading] = useState(true);
+  const [queueError, setQueueError] = useState('');
+  const [requestingSongIds, setRequestingSongIds] = useState(new Set());
+  const [lastAcceptedRequest, setLastAcceptedRequest] = useState(null);
+  const queueRequestInFlight = useRef(false);
+  const songRequestInFlight = useRef(new Set());
+  const requestKeys = useRef(new Map());
 
   const currentUser = useMemo(() => authService.getCurrentUser(), []);
   const [canEdit, setCanEdit] = useState(false);
 // Get all unique tags from songs
-  const availableTags = useMemo(() => ['All', ...new Set(allSongs.flatMap(song =>
-    song.tags ? song.tags.map(tag => tag.name) : []
-  ))], [allSongs]);
+  const availableTags = useMemo(
+    () => ['All', ...new Set(allTags.map((tag) => tag.name))],
+    [allTags]
+  );
 
-  // Filter songs based on search query and selected tag
-  const filteredSongs = useMemo(() => {
-    return allSongs.filter(song => {
-      const matchesSearch = (song.title?.toLowerCase() || '').includes(searchQuery.toLowerCase()) ||
-                           (song.artist?.toLowerCase() || '').includes(searchQuery.toLowerCase());
+  const filteredSongs = allSongs;
 
-      const matchesTag = selectedTag === 'All' ||
-                        (song.tags && song.tags.some(tag => tag.name === selectedTag));
-
-      return matchesSearch && matchesTag;
-    });
-  }, [allSongs, searchQuery, selectedTag]);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearchQuery(searchQuery.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [searchQuery]);
 
   // Reset visibleCount when filters change
   useEffect(() => {
@@ -122,22 +133,54 @@ function Playlists() {
   }, []);
 
   const loadSongs = useCallback(async () => {
+    setIsSearching(true);
     try {
-      const songs = await playlistService.getAllSongs();
+      const hasFilters = Boolean(debouncedSearchQuery) || selectedTag !== 'All';
+      const result = hasFilters
+        ? await songRequestService.getCatalog({
+            query: debouncedSearchQuery,
+            tag: selectedTag === 'All' ? '' : selectedTag,
+            page: 1,
+            limit: 500
+          })
+        : { songs: await playlistService.getAllSongs() };
+      const songs = result.songs || [];
       songs.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'zh-CN'));
       setAllSongs(songs);
+      setCatalogTotal(result.pagination?.total || songs.length);
       setError('');
     } catch (err) {
       setError('加载歌曲列表失败');
     } finally {
       setLoading(false);
+      setIsSearching(false);
+    }
+  }, [debouncedSearchQuery, selectedTag]);
+
+  const loadQueue = useCallback(async () => {
+    if (queueRequestInFlight.current) return;
+    queueRequestInFlight.current = true;
+    setQueueLoading(true);
+    try {
+      setQueueData(await songRequestService.getCurrentQueue());
+      setQueueError('');
+    } catch (err) {
+      setQueueError(songRequestErrorMessage(err, '加载队列'));
+    } finally {
+      queueRequestInFlight.current = false;
+      setQueueLoading(false);
     }
   }, []);
 
   useEffect(() => {
     loadSongs();
+  }, [loadSongs]);
+
+  useEffect(() => {
     loadTags();
-    // Check edit permissions
+  }, [loadTags]);
+
+  useEffect(() => {
     if (currentUser) {
       if (currentUser.role === 'admin') {
         setCanEdit(true);
@@ -148,7 +191,22 @@ function Playlists() {
         }).catch(() => setCanEdit(false));
       }
     }
-  }, [currentUser, loadSongs, loadTags]);
+  }, [currentUser]);
+
+  useEffect(() => {
+    loadQueue();
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') loadQueue();
+    }, 5000);
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') loadQueue();
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener('visibilitychange', handleVisibility);
+    };
+  }, [loadQueue]);
 
   if (loading) {
     return <div className="loading">正在加载歌单...</div>;
@@ -173,6 +231,37 @@ function Playlists() {
     const randomSong = songsToPickFrom[randomIndex];
 
     handleCopyToClipboard(randomSong.title, `那就来听《${randomSong.title}》吧！`);
+  };
+
+  const handleSongRequest = async (event, song) => {
+    event.stopPropagation();
+    if (!authService.isAuthenticated() || songRequestInFlight.current.has(song.id)) return;
+    songRequestInFlight.current.add(song.id);
+    const idempotencyKey = requestKeys.current.get(song.id) || createIdempotencyKey();
+    requestKeys.current.set(song.id, idempotencyKey);
+    setRequestingSongIds((current) => new Set(current).add(song.id));
+    try {
+      const result = await songRequestService.create(song.id, idempotencyKey);
+      setLastAcceptedRequest(result.request);
+      requestKeys.current.delete(song.id);
+      toast(
+        result.status === 'duplicate'
+          ? `《${song.title}》已经在队列中`
+          : `《${song.title}》已加入队列`,
+        { type: 'success' }
+      );
+      await loadQueue();
+    } catch (err) {
+      toast(songRequestErrorMessage(err, '点歌'), { type: 'error' });
+      if (err?.response?.status === 409) await loadQueue();
+    } finally {
+      songRequestInFlight.current.delete(song.id);
+      setRequestingSongIds((current) => {
+        const next = new Set(current);
+        next.delete(song.id);
+        return next;
+      });
+    }
   };
 
   const handleEditClick = (e, song) => {
@@ -322,7 +411,19 @@ function Playlists() {
         )}
       </div>
 
-      <p className="page-subtitle">{siteSettings.playlistSubtitle}</p>
+      <PublicSongQueue
+        data={queueData}
+        loading={queueLoading}
+        error={queueError}
+        onRetry={loadQueue}
+        lastAccepted={lastAcceptedRequest}
+      />
+
+      {!authService.isAuthenticated() && (
+        <InlineAlert type="info" title="登录后可以点歌">
+          你仍可浏览和搜索全部歌曲；登录网站账号后即可加入统一点歌队列。
+        </InlineAlert>
+      )}
 
       {editingSong && (
         <EditSongModal
@@ -362,7 +463,7 @@ function Playlists() {
         />
       )}
 
-      {allSongs.length === 0 ? (
+      {allSongs.length === 0 && !debouncedSearchQuery && selectedTag === 'All' ? (
         <div className="empty-state">
           <div className="empty-state-icon">🎵</div>
           <p>暂无歌曲</p>
@@ -370,7 +471,9 @@ function Playlists() {
       ) : (
         <div>
           <p style={{ color: 'var(--text-light)', marginBottom: '1rem', textAlign: 'center' }}>
-            总歌曲数: {allSongs.length}
+            {debouncedSearchQuery || selectedTag !== 'All'
+              ? `找到 ${catalogTotal} 首歌曲`
+              : `总歌曲数: ${catalogTotal}`}
           </p>
 
           <div
@@ -382,23 +485,37 @@ function Playlists() {
               top: `${navbarHeight + 15}px`
             }}
           >
-            <div style={{ display: 'flex', width: '100%', gap: '10px' }}>
+            <div className="playlist-search-row">
               <input
-                type="text"
+                type="search"
                 placeholder="在此输入歌名或者歌手进行搜索..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="search-input"
-                style={{ flex: 1 }}
+                aria-label="搜索歌名、歌手或别名"
               />
+              {(searchQuery || selectedTag !== 'All') && (
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setSelectedTag('All');
+                  }}
+                >
+                  清除筛选
+                </button>
+              )}
               <button
+                type="button"
                 className="btn btn-primary"
                 onClick={handleRandomPick}
-                style={{ whiteSpace: 'nowrap', borderRadius: '25px', display: 'flex', alignItems: 'center', gap: '5px' }}
+                disabled={filteredSongs.length === 0}
               >
                 随便听听
               </button>
             </div>
+            {isSearching && <span className="playlist-searching" role="status">搜索中...</span>}
 
             {availableTags.length > 1 && (
               <div
@@ -424,7 +541,12 @@ function Playlists() {
             )}
           </div>
 
-          <div className="songs-grid">
+          {filteredSongs.length === 0 && !isSearching ? (
+            <div className="song-request-empty">
+              <strong>没有找到符合条件的歌曲</strong>
+              <span>可以清除搜索或分类后再试。</span>
+            </div>
+          ) : <div className="songs-grid">
             {filteredSongs.slice(0, visibleCount).map((song, index) => (
               <div
                 key={song.id}
@@ -475,9 +597,20 @@ function Playlists() {
                     ✏️
                   </button>
                 )}
+                {!isEditMode && (
+                  <button
+                    type="button"
+                    className="song-request-button"
+                    onClick={(event) => handleSongRequest(event, song)}
+                    disabled={!authService.isAuthenticated() || requestingSongIds.has(song.id)}
+                    aria-label={`点歌 ${song.title}`}
+                  >
+                    {requestingSongIds.has(song.id) ? '提交中...' : '点歌'}
+                  </button>
+                )}
               </div>
             ))}
-          </div>
+          </div>}
         </div>
       )}
       {showScrollTop && (

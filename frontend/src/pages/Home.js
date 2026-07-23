@@ -6,7 +6,7 @@ import { useSiteSettings } from '../context/SiteSettingsContext';
 const featureIcons = {
   playlists: '🎵', marshmallows: '🍬', prizes: '🎁',
   siteConfig: '🎨', pointsAdmin: '⭐', prizesAdmin: '🎁',
-  ordersAdmin: '📋', permissions: '🔐'
+  ordersAdmin: '📋', permissions: '🔐', songControl: '🎙️'
 };
 
 function Home() {
@@ -45,6 +45,9 @@ function Home() {
     ...(canManage(permissionService.PERMISSIONS.PRIZE_MANAGE) ? [
       { key: 'prizesAdmin', to: '/admin/prizes', title: '兑换商品管理', description: '创建商品、维护图片、价格、库存和选项。', admin: true },
       { key: 'ordersAdmin', to: '/admin/prize-orders', title: '兑换订单管理', description: '处理兑换订单、收货信息和退款状态。', admin: true }
+    ] : []),
+    ...(canManage(permissionService.PERMISSIONS.LIVE_CONTROL_MANAGE) ? [
+      { key: 'songControl', to: '/admin/song-requests', title: '点歌控制', description: '管理统一点歌队列、场次和历史记录。', admin: true }
     ] : []),
     ...(isAdmin ? [{ key: 'permissions', to: '/admin/permissions', title: '权限管理', description: '管理用户角色、功能权限和注册开关。', admin: true }] : [])
   ];

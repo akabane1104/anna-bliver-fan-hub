@@ -23,8 +23,13 @@ import AdminPoints from './pages/AdminPoints';
 import AdminPrizes from './pages/AdminPrizes';
 import AdminPrizeOrders from './pages/AdminPrizeOrders';
 import SiteConfig from './pages/SiteConfig/SiteConfig';
+import SongRequestControl from './pages/SongRequestControl';
+import LiveStatusAdmin from './pages/LiveStatusAdmin';
+import LiveEventsAdmin from './pages/LiveEventsAdmin';
 import './styles/App.css';
 import './styles/AdminTheme.css';
+import './styles/SongRequests.css';
+import './styles/LiveAdmin.css';
 
 const AuthVerifier = () => {
   const location = useLocation();
@@ -87,6 +92,9 @@ function App() {
                 <Route path="/admin/prizes/:prizeId/edit" element={<PermissionRoute permission="prize.manage"><AdminPrizes /></PermissionRoute>} />
                 <Route path="/admin/prize-orders" element={<PermissionRoute permission="prize.manage"><AdminPrizeOrders /></PermissionRoute>} />
                 <Route path="/admin/site-config" element={<PermissionRoute permission="site_config.manage"><SiteConfig /></PermissionRoute>} />
+                <Route path="/admin/song-requests" element={<PermissionRoute permission="live_control.manage"><SongRequestControl /></PermissionRoute>} />
+                <Route path="/admin/live-status" element={<PermissionRoute permission="live_control.manage"><LiveStatusAdmin /></PermissionRoute>} />
+                <Route path="/admin/live-events" element={<PermissionRoute permission="live_control.manage"><LiveEventsAdmin /></PermissionRoute>} />
               </Routes>
             </main>
             <Footer />

@@ -3,6 +3,7 @@ const {
   assignRequestSchema,
   createSessionSchema,
   fulfillmentSchema,
+  historyQuerySchema,
   manualRequestSchema,
   matchRequestSchema,
   positiveIdParamSchema,
@@ -12,6 +13,8 @@ const {
   sessionTransitionSchema,
   targetQuerySchema
 } = require('../schemas/songRequestSchemas');
+const { liveEventAdminQuerySchema } = require('../schemas/liveAdminSchemas');
+const { defaultLiveAdminService } = require('../services/liveAdminService');
 const { createLiveSessionService } = require('../services/liveSessionService');
 const {
   defaultSongRequestService
@@ -29,7 +32,8 @@ function requestId(req) {
 
 function createLiveControlController({
   sessionService = defaultLiveSessionService,
-  requestService = defaultSongRequestService
+  requestService = defaultSongRequestService,
+  liveAdminService = defaultLiveAdminService
 } = {}) {
   const transitionSession = (toStatus) => async (req, res) => {
     try {
@@ -64,6 +68,29 @@ function createLiveControlController({
   };
 
   return {
+    async liveStatus(req, res) {
+      try {
+        return res.json(await liveAdminService.getStatus());
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async liveEvents(req, res) {
+      try {
+        const validation = liveEventAdminQuerySchema.safeParse(req.query);
+        if (!validation.success) {
+          const error = new Error('查询条件校验失败');
+          error.status = 400;
+          error.code = 'invalid_live_event_query';
+          throw error;
+        }
+        return res.json(await liveAdminService.listEvents(validation.data));
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
     async createSession(req, res) {
       try {
         const input = parseOrThrow(createSessionSchema, req.body);
@@ -92,6 +119,22 @@ function createLiveControlController({
       }
     },
 
+    async activeSessions(req, res) {
+      try {
+        return res.json({ sessions: await sessionService.listActive() });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async recoverableSessions(req, res) {
+      try {
+        return res.json({ sessions: await sessionService.listRecoverable() });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
     async sessionRequests(req, res) {
       try {
         return res.json(await requestService.getSessionRequests(requestId(req)));
@@ -106,6 +149,15 @@ function createLiveControlController({
         return res.json({
           requests: await requestService.getObserved(target.site_id, target.room_id)
         });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async history(req, res) {
+      try {
+        const input = parseOrThrow(historyQuerySchema, req.query, 'invalid_history_query');
+        return res.json(await requestService.getHistory(input));
       } catch (error) {
         return sendSongRequestError(res, error);
       }

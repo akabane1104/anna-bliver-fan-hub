@@ -172,10 +172,10 @@ synthetic fixture -> signer -> loopback HTTP -> Live Event API
 
 ## Phase 4E 沉默 Listener 离线骨架
 
-Phase 4E 在 `services/bilibili-listener` 建立独立进程边界，但尚未实现任何正式 B站网络 Adapter：
+Phase 4E 在 `services/bilibili-listener` 建立独立进程边界；当时尚未实现正式 B站网络 Adapter。Phase 4F-A 在不改变该核心边界的前提下增加了离线验证的官方只读 Adapter：
 
 ```text
-future official adapter (not implemented)
+official read-only adapter (offline-validated)
         |
         | decoded source event
         v
@@ -187,4 +187,65 @@ listener supervisor -> mapper -> bounded FIFO -> signed loopback delivery
 
 Listener 核心将来源连接重连与 Backend 投递重试完全分离，以 connection generation 排除旧 callback，并使用有界内存队列、显式 backpressure、白名单日志和限时 graceful shutdown。Mapper 直接调用 Backend 现有 Zod validator，不维护第二套事件 Schema；事件只序列化一次，投递重试保持 `event_id` 与 raw body 不变。
 
-当前 Synthetic Adapter 仅供完全离线的 dry-run 与隔离测试使用，不是 B站官方封包实现。`start` 模式固定返回 `bilibili_adapter_not_implemented`，不会回退到合成来源。Listener 不发送弹幕、不操作直播间、不处理点数、不解析点歌命令、不连接 MySQL，也不加入正式 Docker Compose。详细安全边界见 [B站沉默 Listener 文档](BILIBILI_LISTENER.md)。
+当前 Synthetic Adapter 仅供完全离线的 dry-run 与隔离测试使用，不是 B站官方封包实现。`start` 模式只有显式指定 `--source=bilibili-official` 才会选择官方 Adapter；未指定时返回 `bilibili_adapter_not_implemented`，不会回退到合成来源。Listener 不发送弹幕、不操作直播间、不处理点数、不解析点歌命令、不连接 MySQL，也不加入正式 Docker Compose。详细安全边界见 [B站沉默 Listener 文档](BILIBILI_LISTENER.md)。
+## Phase 4F-A 官方只读 Listener 边界
+
+`services/bilibili-listener` 现在包含可注入测试的 B站直播开放平台只读
+Adapter。正式数据流保持为：
+
+```text
+Official start/heartbeat/end + WSS
+  -> OfficialBilibiliAdapter
+  -> ListenerSupervisor
+  -> bounded in-memory FIFO
+  -> existing Backend live-event Zod schema
+  -> signed loopback delivery
+  -> Backend (only database writer)
+```
+
+Official Adapter 只负责 control-plane session、AUTH、两套心跳、Proto 解码和
+DM/Gift Source Event 转换。Supervisor 是唯一 source reconnect 所有者；
+Backend delivery 使用另一套有限重试。Listener 不直连 MySQL、不处理点歌或
+积分、不发送弹幕，也不控制直播间。Phase 4F-A 不修改 Phase 4B/4C/4D 对外
+契约，不加入正式 Compose。由于当前官方资料没有发布可核对的 WSS
+hostname/path allowlist，production factory 以
+`official_wss_allowlist_unverified` 保持关闭；真实 B站连通性与 allowlist
+确认留给独立 Phase 4F-B。
+
+## Phase 4G-B 只读观测后台
+
+Phase 4G-B 在既有 `/api/live-control` 管理权限边界内增加状态和事件只读
+查询，不建立第二张事件表，也不改变 Phase 4B 写入或 Phase 4C 点歌事务：
+
+```text
+admin browser
+  -> existing JWT + live_control.manage check
+  -> GET /api/live-control/status
+       -> bounded database health/session/ingestion queries
+       -> in-process fail-closed listener status contract (no URL/fetch)
+  -> GET /api/live-control/events
+       -> parameterized live_events query
+       -> safe admin DTO
+```
+
+Backend、数据库、网站场次、Listener、B站 API/WSS 与事件入站活动是彼此
+独立的状态域。当前部署没有 Listener 到 Backend 的权威运行时状态通道，因此
+Listener 返回 `unavailable`，B站 API/WSS 返回 `unknown`；系统不会根据
+open session 或 `last_event_at` 推测连接成功，也不会因管理页读取触发外部
+连接。
+
+事件查询只读取现有 `live_events`，采用服务端分页、固定稳定排序和 Backend
+字段白名单。Repository 不把 `normalized_payload` 投影到 DTO；上游事件 ID、
+平台身份字段、事件正文、原始 payload、签名与凭据不进入响应。展示用
+`event_ref` 由专用 server-side key、版本前缀和 domain-separated HMAC 产生，
+不参与 Phase 4B 的 `event_id` 幂等／冲突判定，也不能用作鉴权 token。
+
+状态查询先固定最多 100 个 active sessions，再由 SQL grouped aggregation 返回
+固定上限的场次结果；ingestion summary 只返回一行 scalar。事件列表、最后事件与
+最近时间范围使用 additive migration 提供的 `(received_at, id)` 索引。当前仍
+没有 Listener status URL 或网络 provider：默认状态直接 fail closed 为
+`unavailable`，不会建立远端 fetch，也不会猜测 endpoint。未来若新增权威状态
+通道，AbortSignal、timeout abort、endpoint allowlist 与 redirect 策略必须另行
+设计和验证。
+管理 UI 不提供删除、修改、重放、连接控制、积分或队列写入操作。详细边界见
+[直播状态与事件记录后台](LIVE_STATUS_AND_EVENTS_UI.md)。

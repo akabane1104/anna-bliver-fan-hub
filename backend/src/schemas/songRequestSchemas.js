@@ -23,9 +23,19 @@ const positiveIdParamSchema = z.object({
   id: z.coerce.number().int().positive().max(2147483647)
 }).strict();
 
+function requireTargetPair(value, context) {
+  if (Boolean(value.site_id) !== Boolean(value.room_id)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: value.site_id ? ['room_id'] : ['site_id'],
+      message: 'site_id and room_id must be provided together'
+    });
+  }
+}
+
 const websiteSongRequestSchema = z.object({
-  site_id: siteId,
-  room_id: roomId,
+  site_id: siteId.optional(),
+  room_id: roomId.optional(),
   song_id: positiveInt.optional(),
   query: query.optional()
 }).strict().superRefine((value, context) => {
@@ -34,6 +44,14 @@ const websiteSongRequestSchema = z.object({
       code: z.ZodIssueCode.custom,
       path: ['query'],
       message: 'song_id or query is required'
+    });
+  }
+  requireTargetPair(value, context);
+  if (!value.song_id && (!value.site_id || !value.room_id)) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['song_id'],
+      message: 'song_id is required when target is omitted'
     });
   }
 });
@@ -48,6 +66,42 @@ const createSessionSchema = z.object({
 const targetQuerySchema = z.object({
   site_id: siteId,
   room_id: roomId
+}).strict();
+
+const optionalTargetQuerySchema = z.object({
+  site_id: siteId.optional(),
+  room_id: roomId.optional()
+}).strict().superRefine(requireTargetPair);
+
+const catalogQuerySchema = z.object({
+  query: z.string().max(MAX_QUERY_LENGTH).optional().default(''),
+  tag: z.string().trim().max(50).optional().default(''),
+  page: z.coerce.number().int().min(1).max(100000).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(500).optional().default(100)
+}).strict();
+
+const historyQuerySchema = z.object({
+  query: z.string().trim().max(200).optional().default(''),
+  status: z.enum([
+    'observed',
+    'needs_match',
+    'queued',
+    'active',
+    'completed',
+    'rejected',
+    'cancelled',
+    'skipped',
+    'failed'
+  ]).optional(),
+  source: z.enum([
+    'bilibili_danmaku',
+    'website',
+    'manual',
+    'simulation',
+    'replay'
+  ]).optional(),
+  page: z.coerce.number().int().min(1).max(100000).optional().default(1),
+  limit: z.coerce.number().int().min(1).max(100).optional().default(20)
 }).strict();
 
 const sessionTransitionSchema = z.object({
@@ -115,9 +169,12 @@ module.exports = {
   aliasSchema,
   assignRequestSchema,
   createSessionSchema,
+  catalogQuerySchema,
   fulfillmentSchema,
+  historyQuerySchema,
   manualRequestSchema,
   matchRequestSchema,
+  optionalTargetQuerySchema,
   parseIdempotencyKey,
   positiveIdParamSchema,
   publicIdParamSchema,

@@ -214,7 +214,7 @@ CREATE TABLE IF NOT EXISTS live_events (
   INDEX idx_live_event_target (site_id, room_id, occurred_at),
   INDEX idx_live_event_type (event_type, occurred_at),
   INDEX idx_live_event_actor (actor_open_id, occurred_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS live_sessions (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -240,7 +240,7 @@ CREATE TABLE IF NOT EXISTS live_sessions (
   INDEX idx_live_session_playlist (playlist_id),
   CONSTRAINT fk_live_session_playlist FOREIGN KEY (playlist_id) REFERENCES playlists(id),
   CONSTRAINT fk_live_session_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS song_requests (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -300,7 +300,7 @@ CREATE TABLE IF NOT EXISTS song_requests (
   CONSTRAINT fk_song_request_session FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE SET NULL,
   CONSTRAINT fk_song_request_user FOREIGN KEY (requester_user_id) REFERENCES users(id) ON DELETE SET NULL,
   CONSTRAINT fk_song_request_song FOREIGN KEY (matched_song_id) REFERENCES songs(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS song_request_history (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -336,7 +336,7 @@ CREATE TABLE IF NOT EXISTS song_request_history (
   INDEX idx_song_request_history_actor (actor_user_id, created_at),
   CONSTRAINT fk_song_request_history_request FOREIGN KEY (request_id) REFERENCES song_requests(id),
   CONSTRAINT fk_song_request_history_actor FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS song_aliases (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -353,7 +353,7 @@ CREATE TABLE IF NOT EXISTS song_aliases (
   INDEX idx_song_alias_script (script_key, song_id),
   CONSTRAINT fk_song_alias_song FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
   CONSTRAINT fk_song_alias_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE prizes (
   id INT AUTO_INCREMENT PRIMARY KEY,

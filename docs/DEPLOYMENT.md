@@ -15,10 +15,18 @@
 
 ## 数据库账号
 
-先运行基线：
+全新空数据库先运行基线：
 
 ```bash
 mysql -u root -p < backend/src/config/schema.sql
+```
+
+随后使用显式版本化迁移登记并复核 schema：
+
+```bash
+npm run db:migrate:preflight --prefix backend
+npm run db:migrate:apply --prefix backend
+npm run db:migrate:postcheck --prefix backend
 ```
 
 再在 MySQL 中创建独立账号。请替换密码和允许连接的主机：
@@ -32,7 +40,11 @@ FLUSH PRIVILEGES;
 
 后端启动会执行公开积分结构的兼容检查，因此账号需要 `CREATE`、`ALTER` 与 `INDEX`。如果部署流程单独执行迁移，可在迁移结束后按实际查询进一步收紧权限。
 
-`schema.sql` 面向全新安装，不是旧生产数据库迁移工具。不要在未备份的旧库上直接反复执行。
+`schema.sql` 只面向全新空数据库，不是旧生产数据库迁移工具。既有安装必须先备份，
+再使用版本化 migration；不要在旧库上直接反复执行完整 schema。迁移命令不会自动
+读取 `.env`，也不会随 Backend 启动。完整 preflight、status、失败恢复、数据保留
+回退及禁止破坏性删表的流程见
+[数据库版本迁移](SCHEMA_MIGRATIONS.md)。
 
 ## 生产环境变量
 
@@ -153,10 +165,10 @@ server {
 
 1. 备份数据库和上传目录。
 2. 在临时目录执行 `npm ci`、测试和前端构建。
-3. 检查配置与数据库兼容变更。
-4. 原子替换构建产物并重启后端。
+3. 保持 Listener 与事件入口关闭，执行 migration `status`、`preflight`、`apply` 和 `postcheck`。
+4. 只有 postcheck 成功后才替换构建产物并重启后端。
 5. 检查健康接口、日志和核心业务。
-6. 保留可回退的上一版本代码与构建产物。
+6. 保留可回退的上一版本代码与构建产物；应用回退必须保留新增表及数据。
 
 ## 发布验收
 

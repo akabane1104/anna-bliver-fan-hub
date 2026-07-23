@@ -1,8 +1,10 @@
 const {
+  catalogQuerySchema,
+  optionalTargetQuerySchema,
   parseIdempotencyKey,
-  targetQuerySchema,
   websiteSongRequestSchema
 } = require('../schemas/songRequestSchemas');
+const { defaultSongCatalogService } = require('../services/songCatalogService');
 const { defaultSongRequestService } = require('../services/songRequestService');
 const { SongRequestError } = require('../utils/songRequestError');
 
@@ -24,7 +26,10 @@ function sendSongRequestError(res, error) {
   });
 }
 
-function createSongRequestController({ service = defaultSongRequestService } = {}) {
+function createSongRequestController({
+  service = defaultSongRequestService,
+  catalogService = defaultSongCatalogService
+} = {}) {
   return {
     async create(req, res) {
       try {
@@ -41,7 +46,7 @@ function createSongRequestController({ service = defaultSongRequestService } = {
           userId: req.userId,
           idempotencyKey
         });
-        const request = await service.getRequest(result.request.public_id);
+        const request = await service.getPublicRequest(result.request.public_id);
         return res.status(result.duplicate ? 200 : 201).json({
           status: result.duplicate ? 'duplicate' : 'accepted',
           request
@@ -53,8 +58,17 @@ function createSongRequestController({ service = defaultSongRequestService } = {
 
     async current(req, res) {
       try {
-        const target = parseOrThrow(targetQuerySchema, req.query, 'invalid_target');
+        const target = parseOrThrow(optionalTargetQuerySchema, req.query, 'invalid_target');
         return res.json(await service.getCurrentQueue(target.site_id, target.room_id));
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async catalog(req, res) {
+      try {
+        const query = parseOrThrow(catalogQuerySchema, req.query, 'invalid_catalog_query');
+        return res.json(await catalogService.list(query));
       } catch (error) {
         return sendSongRequestError(res, error);
       }

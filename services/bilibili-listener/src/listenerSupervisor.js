@@ -177,6 +177,10 @@ class ListenerSupervisor {
             state: this.status.state,
             error_code: safeErrorCode(error, 'source_connect_failed')
           });
+          if (error?.fatal === true) {
+            this.status.transition('fatal');
+            return;
+          }
           this._scheduleReconnect(generation);
         }
       } finally {

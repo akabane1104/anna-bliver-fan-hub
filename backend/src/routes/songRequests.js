@@ -1,16 +1,29 @@
 const express = require('express');
+const rateLimit = require('express-rate-limit');
 const authMiddleware = require('../middleware/auth');
 const { createSongRequestController } = require('../controllers/songRequestController');
 const asyncHandler = require('../utils/asyncHandler');
 
 function createSongRequestRouter({
   controller = createSongRequestController(),
-  authenticate = authMiddleware
+  authenticate = authMiddleware,
+  writeLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    limit: 30,
+    standardHeaders: true,
+    legacyHeaders: false,
+    handler: (req, res) => res.status(429).json({
+      status: 'rejected',
+      code: 'rate_limited',
+      message: '点歌请求过于频繁，请稍后再试'
+    })
+  })
 } = {}) {
   const router = express.Router();
 
+  router.get('/catalog', asyncHandler(controller.catalog));
   router.get('/current', asyncHandler(controller.current));
-  router.post('/', authenticate, asyncHandler(controller.create));
+  router.post('/', authenticate, writeLimiter, asyncHandler(controller.create));
 
   return router;
 }

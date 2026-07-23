@@ -4,7 +4,7 @@
 
 `services/bilibili-listener` 是未来 B站直播开放平台监听器的独立进程边界。Phase 4E 只建立离线可测试的核心、来源 Adapter 接口、事件转换、投递、重连和关闭机制。
 
-当前实现不会连接 B站、主播直播间、Cloudflare、preview 或其他远程服务，也没有正式 B站 Adapter。`start` 模式固定安全失败并返回 `bilibili_adapter_not_implemented`，不会回退到 Synthetic Adapter 假装正式运行。真实连接必须留待后续独立阶段重新审核。
+当前代码包含 Phase 4F-A 官方只读 Adapter，但本阶段只完成离线实现与验证，未连接 B站、主播直播间、Cloudflare、preview 或其他远程服务。`start` 未显式指定来源时返回 `bilibili_adapter_not_implemented`；即使显式指定 `--source=bilibili-official`，也会因为当前没有任何已核准的 WSS hostname/path allowlist 而返回 `official_wss_allowlist_unverified`。这个边界会在读取正式配置、认证请求、bootstrap、WebSocket、Supervisor 和 Backend 投递之前失败，且不能通过环境变量绕过。程序不会回退到 Synthetic Adapter 假装正式运行。真实连接必须留待后续独立授权阶段审核。
 
 “沉默”表示 Listener 只能接收、转换并投递事件：
 
@@ -26,7 +26,7 @@ Phase 4D 模拟器是一次性 HTTP 契约测试客户端。Phase 4E Listener �
 ## 组件
 
 ```text
-future official adapter (not implemented)
+official read-only adapter (offline-validated)
               |
               | decoded internal Source Event
               v
@@ -44,7 +44,7 @@ future official adapter (not implemented)
 ```
 
 - `config.js`：只从显式传入的 env 对象及受控 override 读取设置，不加载 `.env`。
-- `sourceAdapter.js`：定义来源连接边界，并提供尚未实现的 production factory。
+- `sourceAdapter.js`：定义来源连接边界，并只在显式 opt-in 时建立官方只读 Adapter。
 - `syntheticAdapter.js`：只供 dry-run 与测试使用，网络连接计数始终为零。
 - `listenerSupervisor.js`：管理状态机、generation、心跳、来源重连、队列和关闭。
 - `eventMapper.js`：将内部 Source Event 转为 v1 标准事件，并直接调用 Backend validator。
@@ -54,7 +54,7 @@ future official adapter (not implemented)
 
 ## Source Adapter 接口
 
-未来正式 Adapter 至少提供：
+Source Adapter 接口提供：
 
 - `connect({ siteId, roomId, instanceId, signal })`
 - `disconnect()`
@@ -197,7 +197,7 @@ npm run check --prefix services/bilibili-listener
 
 ## 后续真实接入前检查
 
-未来正式 Adapter 接入前必须独立确认：
+Phase 4F-B 真实接入前必须独立确认：
 
 1. 只使用经过确认的 B站官方开放平台流程与文档。
 2. 明确凭据保管、轮换、最小权限和泄漏响应。
@@ -208,3 +208,191 @@ npm run check --prefix services/bilibili-listener
 7. 保持沉默边界，不新增发送弹幕或直播间操作能力。
 
 在这些检查完成前，不得把 dry-run 或 Synthetic Adapter用于正式运行。
+# Phase 4F-A：B站官方只读 Source Adapter
+
+## 范围与安全边界
+
+Phase 4F-A 在 `services/bilibili-listener` 内实现直播开放平台的只读
+Source Adapter。它只维护官方项目 session、接收事件并交给现有 Listener
+管线，不发送弹幕、不操作直播间、不使用 Cookie 或二维码登录、不读取浏览器、
+不直连 MySQL，也不解析点歌或换算礼物积分。
+
+本阶段的所有验证均使用 synthetic credentials、Fake Official API、Fake
+WebSocket 和隔离 Backend/MySQL。没有连接真实 B站 API 或 WSS。正式
+`start` 必须显式使用 `--source=bilibili-official`；未指定来源仍以
+`bilibili_adapter_not_implemented` 安全失败。缺少任意必要配置时，会在
+`fetch`、DNS 或 WebSocket 构造前失败。
+
+## 官方资料
+
+以下资料于 2026-07-23 只读复核：
+
+- [官方 API](https://open-live.bilibili.com/document/eba8e2e1-847d-e908-2e5c-7a1ec7d9266f)
+- [统一鉴权与错误码](https://open-live.bilibili.com/document/74eec767-e594-7ddd-6aba-257e8317c05d)
+- [长链数据协议](https://open-live.bilibili.com/document/657d8e34-f926-a133-16c0-300c1afc6e6b)
+- [直播事件 CMD](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)
+- [JavaScript 接入指南](https://open-live.bilibili.com/document/a7bd5377-ad7d-a273-25ae-28caf37a7a85)
+- [直播与互玩接入示例说明](https://open-live.bilibili.com/document/67d15b4d-c693-0941-64ca-7232565a5172)
+
+长链文档正文写明心跳频率 20 秒，但同页 Operation 表写
+`OP_HEARTBEAT` 每 30 秒一次。实现采用更保守的 20 秒。项目 API 心跳采用
+20 秒，并在连续 2 次失败后交给 Supervisor 断线重连，避免越过互动玩法
+60 秒无心跳边界。官方文档对不同项目形态还出现 180 秒说明；本实现不放宽
+互动玩法的保守边界。
+
+## 组件
+
+- `officialApiSigner.js`：对唯一一次序列化得到的 raw body 计算 MD5，按官方
+  字典顺序拼接 `x-bili-*` Header，再生成小写 HMAC-SHA256。
+- `officialApiClient.js`：固定
+  `https://live-open.biliapi.com`，只允许 `/v2/app/start`、
+  `/v2/app/heartbeat` 和 `/v2/app/end`。禁止 redirect，限制 response
+  为 64 KiB，并以 response `code` 而不是 HTTP 200 判断业务结果。
+- `officialWssUrl.js`：官方 WSS allowlist 当前为空，所有候选 URL 都以
+  `official_wss_allowlist_unverified` 安全失败。过去代码中的
+  `.chat.bilibili.com` 后缀与 `/sub` 路径只是未经官方证据核准的假设，已经
+  移除且不再被任何 URL 验证器接受。错误不包含候选 URL、query 或凭据。
+- `officialProtocol.js`：实现 16-byte 大端 Proto Header、
+  `AUTH(7)`、`AUTH_REPLY(8)`、`HEARTBEAT(2)`、
+  `HEARTBEAT_REPLY(3)`、消息推送 `(5)`、Version 0 和 Version 2 zlib。
+  支持单 frame 多 packet 与压缩后的嵌套 packet。
+- `officialEventTranslator.js`：只将
+  `LIVE_OPEN_PLATFORM_DM` 和 `LIVE_OPEN_PLATFORM_SEND_GIFT`
+  转成 Phase 4E 内部 Source Event。其他 CMD 计入 ignored，格式错误或
+  room 不一致计入 invalid。
+- `officialBilibiliAdapter.js`：保留未来 start、有限 WSS link failover、
+  AUTH、两套心跳、事件解码、一次断线通知和 best-effort end 的离线实现；
+  当前 `connect` 与底层 socket 方法都先经过同一 WSS 证据边界，因此这些网络
+  能力不可启动。
+- `productionRuntime.js`：把 Official Adapter 接入既有 Supervisor、
+  bounded queue、Backend Zod schema 与 HMAC delivery；当前会在建立这些
+  元件及执行任何网络副作用之前 fail closed。
+
+Supervisor 仍是 source reconnect 的唯一所有者。Adapter 只允许在同一次
+初始 connect 中按官方返回顺序有限尝试 WSS links；进入 connected 后不建立
+第二套重连 timer。Backend delivery retry 与 source reconnect 完全分离。
+
+## Proto 资源限制
+
+| 项目 | 上限 |
+| --- | --- |
+| 单个 WSS frame | 1 MiB |
+| 单个 packet | 1 MiB |
+| zlib 解压结果 | 4 MiB |
+| 单 frame packet 总数 | 128 |
+| 压缩递归深度 | 4 |
+| JSON body | 512 KiB |
+| JSON 深度 / 节点 | 12 / 2048 |
+| 单数组元素 / 单对象字段 | 512 / 256 |
+
+长度错误、截断、未知 Version、压缩错误、资源超限或非法 JSON 都会安全失败，
+不会输出 raw packet、auth body 或事件正文。
+
+## Session 与事件
+
+`start` body 使用 `code` 字符串和安全可序列化的 13 位 `app_id` JSON
+number。返回的 `game_id`、`auth_body`、`wss_link` 和 `anchor_info.room_id`
+必须通过严格验证；room 与 `LISTENER_ROOM_ID` 不一致时立即 end 并失败。
+
+AUTH packet 的 body 是 `start` 返回的原始 `auth_body` UTF-8 bytes。
+WSS 心跳 body 为空。每条 DM/Gift 还必须与 session room 一致。官方
+`msg_id` 作为稳定 `provider_event_id`，最终事件 ID 为：
+
+```text
+bilibili:{room_id}:{msg_id}
+```
+
+同一消息重试保持 event ID、标准事件 body 和 Backend raw body 不变。为避免
+重放时因本机接收时间变化产生 conflict，官方事件的稳定 `timestamp` 同时用于
+`occurred_at` 与 `received_at`。DM 原文只进入 Backend 标准事件，不进入日志。
+Gift 保留官方 `price`、`r_price` 和 `gift_num` 单位，不生成积分副作用。
+`uid` 不作为身份；只保留官方 `open_id`，且不映射网站数字 UID。
+
+## 官方 API 错误分类
+
+| 分类 | 例子 | 行为 |
+| --- | --- | --- |
+| 成功 | `code=0` | 继续 |
+| 配置/签名永久错误 | `4000-4008`、`4010-4013`、`5003-5005`、`5011`、`7002`、`7007-7009`、`8002` | 当前 connect 进入 `fatal`，不在 API client 或 Supervisor 内无限重试 |
+| 暂时错误 | `4009`、`5000-5002`、`7001`、`7010` | 标记 transient，仍由 Supervisor 管理 source reconnect |
+| Session 失效 | `7000`、`7003` | 结束当前 generation |
+| 未知 code | 任意未列值 | fail closed，不猜测可重试性 |
+
+API client 不在内部自动重试。每个请求使用新的 Unix 秒级 timestamp 和 nonce。
+日志不包含 AccessKeyId、AccessKeySecret、Identity Code、Authorization、
+Content-MD5、canonical string、request/response body 或 request ID。
+
+## 配置与启动
+
+未来 Phase 4F-B 解除安全门后，正式来源需要由调用进程显式提供以下环境变量。
+Phase 4F-A 不读取这些值，文档不提供也不保存实际值：
+
+- `LISTENER_SITE_ID`
+- `LISTENER_INSTANCE_ID`
+- `LISTENER_ROOM_ID`
+- `LISTENER_BACKEND_URL`
+- `LIVE_EVENT_INGEST_SECRET`
+- `BILIBILI_APP_ID`
+- `BILIBILI_ACCESS_KEY_ID`
+- `BILIBILI_ACCESS_KEY_SECRET`
+- `BILIBILI_IDENTITY_CODE`
+
+可选有界配置：
+
+- `BILIBILI_API_TIMEOUT_MS`
+- `BILIBILI_AUTH_TIMEOUT_MS`
+- `BILIBILI_API_HEARTBEAT_INTERVAL_MS`
+- `BILIBILI_WS_HEARTBEAT_INTERVAL_MS`
+- `BILIBILI_WS_HEARTBEAT_TIMEOUT_MS`
+- `BILIBILI_API_HEARTBEAT_FAILURE_THRESHOLD`
+- `BILIBILI_END_TIMEOUT_MS`
+
+程序不自动读取 `.env`，不搜索用户目录，也拒绝 `--secret`、
+`--access-key-secret`、`--identity-code`、自定义 API/WSS URL 和任何安全
+绕过参数。B站 AccessKeySecret 与 Backend ingest secret 必须分离。
+
+```powershell
+# 完全离线，不读取 B站凭据
+npm run dry-run --prefix services/bilibili-listener -- --json
+
+# 仅展示未来显式 opt-in 形式；Phase 4F-A 禁止实际执行
+npm start --prefix services/bilibili-listener -- --source=bilibili-official
+```
+
+固定 Node 20 runtime 可通过 `--experimental-websocket` 提供内建 WebSocket，
+未增加 `ws` 或其他依赖。但在 WSS 证据边界获核准前，production factory 总是
+先返回 `official_wss_allowlist_unverified`，不会继续检查或构造 WebSocket，
+也不会发起认证、bootstrap、重连或 Backend ingest。
+
+## 离线测试
+
+```powershell
+npm run test:official --prefix services/bilibili-listener
+npm run test:e2e:official --prefix services/bilibili-listener
+npm run test:unit --prefix services/bilibili-listener
+npm run test:integration --prefix services/bilibili-listener
+npm run test:e2e --prefix services/bilibili-listener
+npm run check --prefix services/bilibili-listener
+```
+
+当前离线测试继续覆盖签名、官方 API response 解析、Proto codec、事件翻译、
+dry-run 与既有 Listener 管线；这些测试使用 fake/spy，不读取正式 `.env`，
+也不接触正式容器或数据库。official runtime 测试专门断言所有候选 WSS URL
+均失败，并确认 fetch、认证 discovery、bootstrap、WebSocket、socket factory、
+Backend ingest 与 reconnect 调度全部为 0。离线 parser、protocol 或 dry-run
+通过不代表 endpoint 已获官方认可，也不代表真实连通性已经验证。
+
+未来若要启用正式 WSS，必须另开授权与安全审核阶段，并至少完成：
+
+- 保存可追溯的官方 endpoint 来源与版本／取得时间。
+- 明确定义并审查 hostname、path 与 port 契约。
+- 补齐 URL canonicalization、redirect、DNS 与解析后 IP 边界测试。
+- 在隔离环境验证正式凭据边界、日志脱敏和受控连通性。
+- 以代码审查明确替换当前空 allowlist；不得通过环境变量临时加入 host。
+
+当前没有磁盘事件持久化。Official Adapter 不实现 `pause/resume`，因此高负载
+时 bounded queue 会明确 `queue_rejected`，不能假装已经向官方上游施加
+backpressure。真实 B站连通性、凭据权限、动态 WSS links 和长时间运行只能在
+用户完成官方项目审核与 Secret 管理后，由后续独立授权阶段的受控 smoke test
+验证。当前 `SAFE_TO_ENABLE_OFFICIAL_LISTENER = false`，
+`PRODUCTION_BILIBILI_CONNECTIVITY_VERIFIED = false`。

@@ -8,6 +8,7 @@ const { assertLoopbackBaseUrl } = require('./urlSafety');
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const MODES = new Set(['dry-run', 'test', 'production']);
+const CANONICAL_DECIMAL_PATTERN = /^[1-9][0-9]*$/;
 
 const NUMERIC_SETTINGS = Object.freeze({
   connectTimeoutMs: Object.freeze({
@@ -42,6 +43,42 @@ const NUMERIC_SETTINGS = Object.freeze({
   }),
   shutdownDrainTimeoutMs: Object.freeze({
     env: 'LISTENER_SHUTDOWN_DRAIN_TIMEOUT_MS', fallback: 10000, min: 100, max: 120000
+  })
+});
+
+const OFFICIAL_NUMERIC_SETTINGS = Object.freeze({
+  apiTimeoutMs: Object.freeze({
+    env: 'BILIBILI_API_TIMEOUT_MS', fallback: 5000, min: 100, max: 15000
+  }),
+  authTimeoutMs: Object.freeze({
+    env: 'BILIBILI_AUTH_TIMEOUT_MS', fallback: 10000, min: 100, max: 30000
+  }),
+  apiHeartbeatIntervalMs: Object.freeze({
+    env: 'BILIBILI_API_HEARTBEAT_INTERVAL_MS',
+    fallback: 20000,
+    min: 5000,
+    max: 20000
+  }),
+  wsHeartbeatIntervalMs: Object.freeze({
+    env: 'BILIBILI_WS_HEARTBEAT_INTERVAL_MS',
+    fallback: 20000,
+    min: 5000,
+    max: 30000
+  }),
+  wsHeartbeatTimeoutMs: Object.freeze({
+    env: 'BILIBILI_WS_HEARTBEAT_TIMEOUT_MS',
+    fallback: 30000,
+    min: 5000,
+    max: 45000
+  }),
+  apiHeartbeatFailureThreshold: Object.freeze({
+    env: 'BILIBILI_API_HEARTBEAT_FAILURE_THRESHOLD',
+    fallback: 2,
+    min: 1,
+    max: 2
+  }),
+  endTimeoutMs: Object.freeze({
+    env: 'BILIBILI_END_TIMEOUT_MS', fallback: 5000, min: 100, max: 15000
   })
 });
 
@@ -121,10 +158,96 @@ function loadListenerConfig(env = {}, {
   });
 }
 
+function requiredCredential(env, name, {
+  minBytes = 8,
+  maxBytes = 512
+} = {}) {
+  const value = String(env[name] || '');
+  const bytes = Buffer.byteLength(value, 'utf8');
+  if (
+    !value.trim() ||
+    value !== value.trim() ||
+    bytes < minBytes ||
+    bytes > maxBytes ||
+    isPlaceholderSecret(value)
+  ) {
+    throw listenerError('invalid_bilibili_credentials');
+  }
+  return value;
+}
+
+function canonicalSafeInteger(value, code, {
+  exactDigits = null
+} = {}) {
+  const raw = String(value || '');
+  if (
+    !CANONICAL_DECIMAL_PATTERN.test(raw) ||
+    (exactDigits !== null && raw.length !== exactDigits) ||
+    !Number.isSafeInteger(Number(raw))
+  ) {
+    throw listenerError(code);
+  }
+  return raw;
+}
+
+function loadOfficialBilibiliConfig(env = {}, {
+  expectedRoomId,
+  overrides = {}
+} = {}) {
+  const appId = canonicalSafeInteger(
+    overrides.appId ?? env.BILIBILI_APP_ID,
+    'invalid_bilibili_app_id',
+    { exactDigits: 13 }
+  );
+  const roomId = canonicalSafeInteger(
+    expectedRoomId,
+    'invalid_listener_room_id'
+  );
+  const accessKeyId = requiredCredential(env, 'BILIBILI_ACCESS_KEY_ID', {
+    minBytes: 4,
+    maxBytes: 128
+  });
+  const accessKeySecret = requiredCredential(env, 'BILIBILI_ACCESS_KEY_SECRET', {
+    minBytes: 16,
+    maxBytes: 256
+  });
+  const identityCode = requiredCredential(env, 'BILIBILI_IDENTITY_CODE', {
+    minBytes: 8,
+    maxBytes: 512
+  });
+  if (accessKeySecret === String(env.LIVE_EVENT_INGEST_SECRET || '')) {
+    throw listenerError('bilibili_secret_reuse_forbidden');
+  }
+
+  const numeric = {};
+  for (const [key, definition] of Object.entries(OFFICIAL_NUMERIC_SETTINGS)) {
+    numeric[key] = parseInteger(
+      overrides[key] ?? env[definition.env],
+      definition
+    );
+  }
+  if (numeric.wsHeartbeatTimeoutMs <= numeric.wsHeartbeatIntervalMs) {
+    throw listenerError('invalid_bilibili_heartbeat_range');
+  }
+
+  return Object.freeze({
+    appId,
+    roomId,
+    accessKeyId,
+    accessKeySecret,
+    identityCode,
+    ...numeric
+  });
+}
+
 module.exports = {
+  CANONICAL_DECIMAL_PATTERN,
   INSTANCE_ID_PATTERN,
   MODES,
   NUMERIC_SETTINGS,
+  OFFICIAL_NUMERIC_SETTINGS,
+  canonicalSafeInteger,
   loadListenerConfig,
+  loadOfficialBilibiliConfig,
   parseInteger
 };
