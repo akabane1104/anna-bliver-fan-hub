@@ -197,3 +197,127 @@ ACK 表示事件已进入网站账本，不保证已经折算为积分。房间�
 - 网站到 Bot 的命令：新建反向命令通道并加入请求 ID、权限、超时和 ACK，不复用当前单向事件格式。
 
 若协议需要多个版本，新增顶层 `schema_version`，旧消息缺失时按版本 `1` 处理；不要改变已有字段含义。
+
+## Live Control Event API v1
+
+这是供未来独立沉默监听器调用的服务到服务入口，与上面的旧 `bili-bot` WebSocket 积分链彼此独立。
+
+### 开关与目标
+
+接口路径：
+
+```http
+POST /api/internal/live-events/v1/ingest
+```
+
+运行配置：
+
+| 环境变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `LIVE_EVENT_INGEST_ENABLED` | `false` | 只有精确设置为 `true` 才启用；关闭时返回 `404` |
+| `LIVE_EVENT_INGEST_SECRET` | 空 | HMAC 服务密钥，启用时至少 32 bytes，示例或占位密钥无效 |
+| `LIVE_EVENT_MAX_SKEW_SECONDS` | `300` | 请求时间戳允许偏差，范围为 1–3600 秒 |
+| `LIVE_EVENT_ALLOWED_TARGETS` | 空 | 逗号分隔的 `site_id:room_id` 明确配对，例如 `main-site:123456,backup-site:789012` |
+
+目标列表为空、含通配符、格式错误或 Secret 不合格时，即使开关为 `true` 也会安全失败并返回 `503 ingest_unavailable`。接口不接受网站 JWT、管理员 Token、Cookie 或浏览器 `Origin` 作为服务身份。
+
+### 请求签名
+
+请求必须使用 `Content-Type: application/json`，不接受压缩，请求体解压前后的最大允许值均以未压缩 JSON 为准且不得超过 64 KiB。请求头：
+
+```http
+X-Live-Timestamp: <Unix seconds>
+X-Live-Signature: <64 lowercase or uppercase hexadecimal characters>
+```
+
+签名输入是收到的原始 JSON bytes，不是重新序列化后的对象：
+
+```text
+HMAC-SHA256(
+  LIVE_EVENT_INGEST_SECRET,
+  X-Live-Timestamp + "." + raw_request_body
+)
+```
+
+服务端使用 Node.js `crypto.timingSafeEqual` 比较固定长度摘要。调用方应先完成 JSON 序列化，再对同一组 bytes 签名；时间戳超出允许偏差会被拒绝。Secret、完整签名及原始请求体不得进入日志。
+
+### 标准事件 Envelope
+
+所有字段均为必填，只有各事件表中标记为可选的子字段例外。对象采用严格 Schema，未知字段会直接拒绝，不会保存官方原始完整包。
+
+```json
+{
+  "schema_version": "1.0",
+  "event_id": "source:stable:event:identifier",
+  "event_type": "danmaku",
+  "site_id": "main-site",
+  "room_id": "900719925474099312345",
+  "mode": "simulation",
+  "source": {
+    "platform": "bilibili_live_open",
+    "cmd": "LIVE_OPEN_PLATFORM_DM",
+    "message_id": "source-message-id",
+    "session_id": "source-session-id"
+  },
+  "actor": {
+    "open_id": "platform-open-id",
+    "union_id": "optional-platform-union-id",
+    "display_name": "公开昵称",
+    "avatar_url": "https://example.com/avatar.png"
+  },
+  "occurred_at": "2026-07-23T08:00:00+08:00",
+  "received_at": "2026-07-23T08:00:01+08:00",
+  "payload": {
+    "text": "合成测试内容",
+    "dm_type": "text"
+  },
+  "delivery": {
+    "attempt": 1,
+    "replay": false,
+    "trace_id": "listener-local-trace"
+  }
+}
+```
+
+`schema_version` 当前只接受 `1.0`；`mode` 只接受 `live`、`simulation`、`replay`。`room_id` 始终作为数字字符串处理，可安全保存超过 JavaScript 安全整数范围的值。`replay` 模式必须同时设置 `delivery.replay=true`，并保留来源最初生成的 `event_id`。
+
+`actor.open_id` 是官方直播开放平台身份。`danmaku`、`gift`、`super_chat`、`guard_buy`、`like`、`room_enter` 必须提供；`live_start` 与 `live_end` 可将 `actor` 设为 `null`。不接受 `uid`，也不会根据昵称、头像或其他模糊资料推测数字 UID。
+
+### 事件类型与 Payload
+
+| `event_type` | `source.cmd` | 严格 Payload |
+| --- | --- | --- |
+| `danmaku` | `LIVE_OPEN_PLATFORM_DM` | `text`；可选 `dm_type=text/emoji`、`emoji_url` |
+| `gift` | `LIVE_OPEN_PLATFORM_SEND_GIFT` | `gift_id`、`gift_name`、`gift_num`、`paid`、原始字符串 `price`、可选 `r_price`、`price_unit=bilibili_price` |
+| `super_chat` | `LIVE_OPEN_PLATFORM_SUPER_CHAT` | `message_id`、`message`、原始字符串 `rmb`、`currency_unit=CNY` |
+| `guard_buy` | `LIVE_OPEN_PLATFORM_GUARD` | `guard_level=1/2/3`、`guard_num`、`guard_unit=month/year`、原始字符串 `price`、`price_unit=bilibili_guard_price` |
+| `like` | `LIVE_OPEN_PLATFORM_LIKE` | 正整数 `like_count` |
+| `room_enter` | `LIVE_OPEN_PLATFORM_LIVE_ROOM_ENTER` | 空对象 `{}` |
+| `live_start` | `LIVE_OPEN_PLATFORM_LIVE_START` | 可选 `title`、`area_name` |
+| `live_end` | `LIVE_OPEN_PLATFORM_LIVE_END` | 可选 `title`、`area_name` |
+
+金额字段保留监听器从官方事件取得的原始单位和字符串精度。入口不会换算人民币、硬币或积分，也不会调用 `pointsService`。
+
+### ACK、错误与幂等
+
+| HTTP | `status` | `reason` | 含义 |
+| --- | --- | --- | --- |
+| `201` | `accepted` | 无 | 首次验证并写入 `live_events` |
+| `200` | `duplicate` | 无 | 相同 `event_id` 与规范化内容已存在 |
+| `409` | `rejected` | `event_id_conflict` | 相同 `event_id` 对应不同规范化内容，原记录不变 |
+| `400` | `rejected` | `invalid_json` | JSON 或 UTF-8 无效 |
+| `401` | `rejected` | `invalid_service_signature` / `timestamp_out_of_range` | 签名或时间窗口无效 |
+| `403` | `rejected` | `service_identity_required` / `target_not_allowed` | 使用了浏览器/网站身份，或目标配对不在白名单 |
+| `413` | `rejected` | `payload_too_large` | 请求体超过 64 KiB |
+| `415` | `rejected` | `unsupported_media_type` / `unsupported_content_encoding` | 不是未压缩 JSON |
+| `422` | `rejected` | `invalid_event_schema` | 标准事件 Schema 无效 |
+| `500` | `rejected` | `database_error` | 持久化失败，绝不返回 `accepted` |
+| `503` | `rejected` | `ingest_unavailable` | 已开启但安全配置不完整 |
+
+`event_id` 在 `live_events` 全局唯一。`content_hash` 对严格校验后的完整事件做稳定键排序后计算，因此 JSON Object 键顺序不同仍会得到 `duplicate`。冲突不会覆盖、合并或更新原记录。
+
+### 隐私与处理边界
+
+数据库会保存未来明确身份映射所需的 `actor_open_id` 与可选 `actor_union_id`；二者属于平台个人识别资料，应按最小权限、备份保护和保留期限管理。日志只允许事件 ID、类型、站点、房间、模式、处理结果、脱敏错误码和耗时，不记录 open_id、union_id、弹幕/SC 正文、原始包或鉴权资料。
+
+此入口只记录事件：不接受网站用户 Token，不建立用户会话，不调整积分，不创建双队列，不推送 WebSocket，不控制 OBS、播放器或酷狗，也不发送直播弹幕。

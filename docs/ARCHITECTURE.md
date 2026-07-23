@@ -95,3 +95,30 @@ settings 表 > 后端环境变量 > 代码默认值
 ## 公开版边界
 
 本仓库不包含 Bot 管理、QQ/AI 配置、盲盒、礼物截图或展示、OBS、激活码、主播房间管理和电影票币种。bili-bot 仅通过公开事件协议接入，扩展约定见 [API 文档](API.md#bili-bot-websocket-接口)。
+
+## Live Control API 边界
+
+Phase 4B 在现有 Express backend 内新增默认关闭的 `POST /api/internal/live-events/v1/ingest`，只负责服务签名、严格 Schema、目标白名单、幂等判定与 `live_events` 持久化：
+
+```text
+future silent listener
+        |
+        | signed normalized event (HMAC-SHA256)
+        v
+Live Control Event API
+        |
+        `-- live_events only
+
+users / UID bindings / point_accounts / points ledger   (no connection)
+sing queue / playback queue / OBS / Kugou / danmaku     (not implemented)
+```
+
+未来的 B站沉默监听器必须是独立进程：它连接官方直播开放平台、维护心跳与重连、标准化和重播事件，但不能直接写 MySQL。backend 是唯一数据库写入方；监听器也不能持有网站用户 JWT 或管理员 Token。
+
+`live_events.actor_open_id` 保存官方开放平台的 `open_id`。它不等于现有 `point_accounts.bilibili_uid` 数字 UID，两者之间没有外键。未来若要自动积分，必须先设计经过用户明确确认、可审计且一对一的身份映射；禁止通过昵称、头像或字符串相似度推测。当前 `live_events` 与 `botEventBridge`、`bilibili_point_events`、`pointsService` 及全部钱包/流水表完全隔离。
+
+本阶段不包含演唱/播放双队列、OBS Overlay、酷狗控制、本地 Helper、私有中控台或发送弹幕。上述模块未来只能消费经过授权的派生事件或命令，不能绕过 backend 直接修改业务数据库。
+
+旧 `botEventBridge.stopBotEventBridge()` 仍存在已知停机问题：主动关闭 socket 后，`close` 处理器可能再次安排重连。本阶段不修改该旧桥接器；在未来启用或下线旧 Bot 前必须单独修复并补停机测试。
+
+`open_id` 与 `union_id` 属于平台个人识别资料。数据库备份、运维访问和保留期限应遵循最小权限；应用日志禁止保存完整标识、弹幕/SC 正文、Secret、签名和官方原始事件包。

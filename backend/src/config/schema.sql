@@ -181,6 +181,41 @@ CREATE TABLE bilibili_point_events (
   INDEX idx_point_event_uid (bilibili_uid, event_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS live_events (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  event_id VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  schema_version VARCHAR(16) NOT NULL,
+  event_type ENUM(
+    'danmaku',
+    'gift',
+    'super_chat',
+    'guard_buy',
+    'like',
+    'room_enter',
+    'live_start',
+    'live_end'
+  ) NOT NULL,
+  site_id VARCHAR(64) NOT NULL,
+  room_id VARCHAR(32) NOT NULL,
+  mode ENUM('live','simulation','replay') NOT NULL,
+  source_cmd VARCHAR(100) NOT NULL,
+  source_message_id VARCHAR(255) DEFAULT NULL,
+  source_session_id VARCHAR(255) DEFAULT NULL,
+  actor_open_id VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
+  actor_union_id VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
+  actor_display_name VARCHAR(100) DEFAULT NULL,
+  occurred_at DATETIME(3) NOT NULL,
+  received_at DATETIME(3) NOT NULL,
+  normalized_payload JSON NOT NULL,
+  content_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  status ENUM('recorded') NOT NULL DEFAULT 'recorded',
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY unique_live_event_id (event_id),
+  INDEX idx_live_event_target (site_id, room_id, occurred_at),
+  INDEX idx_live_event_type (event_type, occurred_at),
+  INDEX idx_live_event_actor (actor_open_id, occurred_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE prizes (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(255) NOT NULL,

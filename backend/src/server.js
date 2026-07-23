@@ -15,6 +15,7 @@ const bilibiliRoutes = require('./routes/bilibili');
 const bilibiliBindingRoutes = require('./routes/bilibiliBinding');
 const permissionRoutes = require('./routes/permissions');
 const pointsRoutes = require('./routes/points');
+const { createLiveEventRouter } = require('./routes/liveEvents');
 const pointsService = require('./services/pointsService');
 const { startBotEventBridge } = require('./services/botEventBridge');
 
@@ -24,6 +25,7 @@ const REQUEST_BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || '4mb';
 
 app.set('trust proxy', resolveTrustProxy());
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+app.use('/api/internal/live-events/v1', createLiveEventRouter());
 app.use(cors(createCorsOptions()));
 app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
 app.use(express.urlencoded({ extended: true, limit: REQUEST_BODY_LIMIT }));
