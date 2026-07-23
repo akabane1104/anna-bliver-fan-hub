@@ -1,5 +1,6 @@
 const database = require('../config/database');
 const { createContentHash } = require('../utils/canonicalJson');
+const { defaultSongRequestService } = require('./songRequestService');
 
 const INSERT_LIVE_EVENT_SQL = `
   INSERT INTO live_events (
@@ -27,10 +28,12 @@ function toMysqlUtcDateTime(value) {
   return new Date(value).toISOString().slice(0, 23).replace('T', ' ');
 }
 
-function createMysqlLiveEventRepository(pool = database) {
-  return {
+function createMysqlLiveEventRepository(queryable = database, { transactionRoot = true } = {}) {
+  const repository = {
+    queryable,
+
     async insert(record) {
-      const [result] = await pool.execute(INSERT_LIVE_EVENT_SQL, [
+      const [result] = await queryable.execute(INSERT_LIVE_EVENT_SQL, [
         record.eventId,
         record.schemaVersion,
         record.eventType,
@@ -52,13 +55,35 @@ function createMysqlLiveEventRepository(pool = database) {
     },
 
     async findByEventId(eventId) {
-      const [rows] = await pool.execute(
+      const [rows] = await queryable.execute(
         'SELECT event_id, content_hash FROM live_events WHERE event_id = ? LIMIT 1',
         [eventId]
       );
       return rows[0] || null;
     }
   };
+
+  if (transactionRoot && typeof queryable.getConnection === 'function') {
+    repository.runInTransaction = async (work) => {
+      const connection = await queryable.getConnection();
+      try {
+        await connection.beginTransaction();
+        const result = await work(createMysqlLiveEventRepository(
+          connection,
+          { transactionRoot: false }
+        ));
+        await connection.commit();
+        return result;
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
+      }
+    };
+  }
+
+  return repository;
 }
 
 function toLiveEventRecord(event) {
@@ -82,26 +107,48 @@ function toLiveEventRecord(event) {
   };
 }
 
-function createLiveEventService({ repository = createMysqlLiveEventRepository() } = {}) {
+async function recordWithRepository(event, repository, acceptedEventObserver) {
+  const record = toLiveEventRecord(event);
+  try {
+    await repository.insert(record);
+    const observation = acceptedEventObserver
+      ? await acceptedEventObserver(event, { connection: repository.queryable })
+      : null;
+    return { status: 'accepted', contentHash: record.contentHash, observation };
+  } catch (error) {
+    if (error?.code !== 'ER_DUP_ENTRY') throw error;
+    const existing = await repository.findByEventId(record.eventId);
+    if (!existing) throw error;
+    if (existing.content_hash === record.contentHash) {
+      return { status: 'duplicate', contentHash: record.contentHash };
+    }
+    return {
+      status: 'rejected',
+      reason: 'event_id_conflict',
+      contentHash: record.contentHash
+    };
+  }
+}
+
+function createLiveEventService(options = {}) {
+  const repository = options.repository || createMysqlLiveEventRepository();
+  const acceptedEventObserver = Object.prototype.hasOwnProperty.call(
+    options,
+    'acceptedEventObserver'
+  )
+    ? options.acceptedEventObserver
+    : (options.repository
+      ? null
+      : defaultSongRequestService.observeAcceptedDanmaku.bind(defaultSongRequestService));
+
   return {
     async record(event) {
-      const record = toLiveEventRecord(event);
-      try {
-        await repository.insert(record);
-        return { status: 'accepted', contentHash: record.contentHash };
-      } catch (error) {
-        if (error?.code !== 'ER_DUP_ENTRY') throw error;
-        const existing = await repository.findByEventId(record.eventId);
-        if (!existing) throw error;
-        if (existing.content_hash === record.contentHash) {
-          return { status: 'duplicate', contentHash: record.contentHash };
-        }
-        return {
-          status: 'rejected',
-          reason: 'event_id_conflict',
-          contentHash: record.contentHash
-        };
+      if (typeof repository.runInTransaction === 'function') {
+        return repository.runInTransaction((transactionRepository) => (
+          recordWithRepository(event, transactionRepository, acceptedEventObserver)
+        ));
       }
+      return recordWithRepository(event, repository, acceptedEventObserver);
     }
   };
 }
@@ -110,5 +157,6 @@ module.exports = {
   INSERT_LIVE_EVENT_SQL,
   createLiveEventService,
   createMysqlLiveEventRepository,
+  recordWithRepository,
   toLiveEventRecord
 };

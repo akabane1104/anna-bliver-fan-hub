@@ -122,3 +122,35 @@ sing queue / playback queue / OBS / Kugou / danmaku     (not implemented)
 旧 `botEventBridge.stopBotEventBridge()` 仍存在已知停机问题：主动关闭 socket 后，`close` 处理器可能再次安排重连。本阶段不修改该旧桥接器；在未来启用或下线旧 Bot 前必须单独修复并补停机测试。
 
 `open_id` 与 `union_id` 属于平台个人识别资料。数据库备份、运维访问和保留期限应遵循最小权限；应用日志禁止保存完整标识、弹幕/SC 正文、Secret、签名和官方原始事件包。
+
+## Phase 4C 统一点歌队列
+
+Phase 4C 在 Phase 4B 的持久化事件入口之后增加单一、统一的点歌队列：
+
+```text
+silent listener                          website user
+      | signed standard event                 | JWT + Idempotency-Key
+      v                                       v
+live_events -- accepted danmaku --> strict command parser
+                                      |
+                                      v
+                              song_requests
+                                      |
+                     +----------------+----------------+
+                     |                                 |
+             live_sessions                      song_aliases
+                     |
+             song_request_history
+```
+
+backend 仍是唯一数据库写入者。首次 accepted 的 `danmaku` 与其派生 `song_request` 在同一个 MySQL 事务中提交；解析、匹配或请求写入失败时，`live_event` 也会回滚，因此不会留下无法恢复的半条数据。duplicate 与 conflict 不再次解析，`source_event_id` 唯一约束提供第二层幂等保护。普通弹幕及 gift、super_chat、guard_buy、like、room_enter、live_start、live_end 不创建请求。
+
+所有观众请求进入同一条队列。公开层只有 `点歌`/`點歌`，不存在播放指令或背景播放队列。`sung` 与 `played` 只是主播处理时设置的内部 `fulfillment_type`；请求建立时固定为 `undecided`。
+
+简繁处理只作用于命令前缀与歌曲/别名匹配键。数据库歌曲、歌手、别名原文及弹幕原文不会被覆盖，前端也不执行全站转换。匹配先做大小写敏感的原文精确比较，再依次使用 NFKC/空白、简繁脚本键、别名原文与别名脚本键。包含匹配及英文大小写折叠只产生最多五个候选，不会自动选歌；因此 `fancy` 与 `FANCY` 可分别精确命中，而 `Fancy` 必须人工确认。
+
+`live_sessions` 用生成列与唯一索引保证同一 `site_id + room_id` 同时最多一个 open/paused 场次。新增与重排请求都锁定场次行；队列序号使用数据库当前读生成，不依赖 Node.js 内存计数器。场次 `version` 在队列成员或顺序改变时推进，过期重排会稳定返回冲突。
+
+`song_requests.requester_open_id` 与网站 `requester_user_id` 保持隔离：open_id 不连接数字 UID，也不按显示名推测网站用户。公开队列只使用 public ID 和安全显示字段。全部管理操作需要管理员或 `live_control.manage` 权限，并写入不可变 history；本阶段不自动向正式用户授予权限。
+
+本阶段不修改前端，不建立全站简繁切换，不连接真实 B站，不调整积分，不依赖旧 Bot，不发送弹幕，也不控制 OBS、酷狗或本地 Helper。当前实现可在未启用正式事件入口、未迁移正式数据库时作为影子代码接受审核。

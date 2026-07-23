@@ -1,0 +1,237 @@
+const {
+  aliasSchema,
+  assignRequestSchema,
+  createSessionSchema,
+  fulfillmentSchema,
+  manualRequestSchema,
+  matchRequestSchema,
+  positiveIdParamSchema,
+  publicIdParamSchema,
+  reorderSchema,
+  requestTransitionSchema,
+  sessionTransitionSchema,
+  targetQuerySchema
+} = require('../schemas/songRequestSchemas');
+const { createLiveSessionService } = require('../services/liveSessionService');
+const {
+  defaultSongRequestService
+} = require('../services/songRequestService');
+const {
+  parseOrThrow,
+  sendSongRequestError
+} = require('./songRequestController');
+
+const defaultLiveSessionService = createLiveSessionService();
+
+function requestId(req) {
+  return parseOrThrow(publicIdParamSchema, req.params, 'invalid_request_id').publicId;
+}
+
+function createLiveControlController({
+  sessionService = defaultLiveSessionService,
+  requestService = defaultSongRequestService
+} = {}) {
+  const transitionSession = (toStatus) => async (req, res) => {
+    try {
+      const publicId = requestId(req);
+      const input = parseOrThrow(sessionTransitionSchema, req.body);
+      return res.json({
+        status: 'accepted',
+        session: await sessionService.transition(publicId, toStatus, input.expected_version)
+      });
+    } catch (error) {
+      return sendSongRequestError(res, error);
+    }
+  };
+
+  const transitionRequest = (toStatus) => async (req, res) => {
+    try {
+      const publicId = requestId(req);
+      const input = parseOrThrow(requestTransitionSchema, req.body);
+      const request = await requestService.transitionRequest(
+        publicId,
+        toStatus,
+        input,
+        req.userId
+      );
+      return res.json({
+        status: 'accepted',
+        request: await requestService.getRequest(request.public_id)
+      });
+    } catch (error) {
+      return sendSongRequestError(res, error);
+    }
+  };
+
+  return {
+    async createSession(req, res) {
+      try {
+        const input = parseOrThrow(createSessionSchema, req.body);
+        return res.status(201).json({
+          status: 'accepted',
+          session: await sessionService.createDraft(input, req.userId)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    openSession: transitionSession('open'),
+    pauseSession: transitionSession('paused'),
+    resumeSession: transitionSession('open'),
+    closeSession: transitionSession('closed'),
+
+    async currentSession(req, res) {
+      try {
+        const target = parseOrThrow(targetQuerySchema, req.query, 'invalid_target');
+        return res.json({
+          session: await sessionService.getCurrent(target.site_id, target.room_id)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async sessionRequests(req, res) {
+      try {
+        return res.json(await requestService.getSessionRequests(requestId(req)));
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async observedRequests(req, res) {
+      try {
+        const target = parseOrThrow(targetQuerySchema, req.query, 'invalid_target');
+        return res.json({
+          requests: await requestService.getObserved(target.site_id, target.room_id)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async createManualRequest(req, res) {
+      try {
+        const input = parseOrThrow(manualRequestSchema, req.body);
+        const request = await requestService.createManualRequest(input, req.userId);
+        return res.status(201).json({
+          status: 'accepted',
+          request: await requestService.getRequest(request.public_id)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async assignRequest(req, res) {
+      try {
+        const input = parseOrThrow(assignRequestSchema, req.body);
+        const request = await requestService.assignToSession(requestId(req), input, req.userId);
+        return res.json({
+          status: 'accepted',
+          request: await requestService.getRequest(request.public_id)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async matchRequest(req, res) {
+      try {
+        const input = parseOrThrow(matchRequestSchema, req.body);
+        const request = await requestService.setManualMatch(requestId(req), input, req.userId);
+        return res.json({
+          status: 'accepted',
+          request: await requestService.getRequest(request.public_id)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async acceptUnmatched(req, res) {
+      try {
+        const input = parseOrThrow(requestTransitionSchema, req.body);
+        const request = await requestService.acceptUnmatched(requestId(req), input, req.userId);
+        return res.json({
+          status: 'accepted',
+          request: await requestService.getRequest(request.public_id)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    rejectRequest: transitionRequest('rejected'),
+    cancelRequest: transitionRequest('cancelled'),
+    activateRequest: transitionRequest('active'),
+    completeRequest: transitionRequest('completed'),
+    skipRequest: transitionRequest('skipped'),
+    failRequest: transitionRequest('failed'),
+    requeueRequest: transitionRequest('queued'),
+
+    async setFulfillment(req, res) {
+      try {
+        const input = parseOrThrow(fulfillmentSchema, req.body);
+        const request = await requestService.setFulfillmentType(
+          requestId(req),
+          input,
+          req.userId
+        );
+        return res.json({
+          status: 'accepted',
+          request: await requestService.getRequest(request.public_id)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async reorder(req, res) {
+      try {
+        const input = parseOrThrow(reorderSchema, req.body);
+        return res.json({
+          status: 'accepted',
+          ...(await requestService.reorder(requestId(req), input, req.userId))
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async listAliases(req, res) {
+      try {
+        const songId = parseOrThrow(positiveIdParamSchema, req.params, 'invalid_song_id').id;
+        return res.json({ aliases: await requestService.listAliases(songId) });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async addAlias(req, res) {
+      try {
+        const songId = parseOrThrow(positiveIdParamSchema, req.params, 'invalid_song_id').id;
+        const input = parseOrThrow(aliasSchema, req.body);
+        return res.status(201).json({
+          status: 'accepted',
+          alias: await requestService.addAlias(songId, input.alias, req.userId)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async deleteAlias(req, res) {
+      try {
+        const aliasId = parseOrThrow(positiveIdParamSchema, req.params, 'invalid_alias_id').id;
+        await requestService.deleteAlias(aliasId);
+        return res.status(204).end();
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    }
+  };
+}
+
+module.exports = { createLiveControlController };

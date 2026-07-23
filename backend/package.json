@@ -28,6 +28,7 @@
     "helmet": "^8.1.0",
     "jsonwebtoken": "^9.0.2",
     "mysql2": "^3.6.5",
+    "opencc-js": "1.4.1",
     "tencentcloud-sdk-nodejs": "^4.0.0",
     "ws": "^8.19.0",
     "zod": "3.25.76"

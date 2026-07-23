@@ -216,6 +216,145 @@ CREATE TABLE IF NOT EXISTS live_events (
   INDEX idx_live_event_actor (actor_open_id, occurred_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
+CREATE TABLE IF NOT EXISTS live_sessions (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  public_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  site_id VARCHAR(64) NOT NULL,
+  room_id VARCHAR(32) NOT NULL,
+  playlist_id INT NOT NULL,
+  title VARCHAR(200) NOT NULL,
+  status ENUM('draft','open','paused','closed') NOT NULL DEFAULT 'draft',
+  active_marker TINYINT GENERATED ALWAYS AS (
+    CASE WHEN status IN ('open','paused') THEN 1 ELSE NULL END
+  ) STORED,
+  created_by_user_id INT DEFAULT NULL,
+  started_at DATETIME(3) DEFAULT NULL,
+  paused_at DATETIME(3) DEFAULT NULL,
+  ended_at DATETIME(3) DEFAULT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  version INT UNSIGNED NOT NULL DEFAULT 0,
+  UNIQUE KEY unique_live_session_public_id (public_id),
+  UNIQUE KEY unique_live_session_active (site_id, room_id, active_marker),
+  INDEX idx_live_session_target (site_id, room_id, status, created_at),
+  INDEX idx_live_session_playlist (playlist_id),
+  CONSTRAINT fk_live_session_playlist FOREIGN KEY (playlist_id) REFERENCES playlists(id),
+  CONSTRAINT fk_live_session_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS song_requests (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  public_id CHAR(36) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+  session_id BIGINT UNSIGNED DEFAULT NULL,
+  site_id VARCHAR(64) NOT NULL,
+  room_id VARCHAR(32) NOT NULL,
+  source ENUM('bilibili_danmaku','website','manual','simulation','replay') NOT NULL,
+  source_event_id VARCHAR(255) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+  idempotency_key VARCHAR(128) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+  idempotency_fingerprint CHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+  requester_user_id INT DEFAULT NULL,
+  requester_open_id VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
+  requester_display_name VARCHAR(100) DEFAULT NULL,
+  raw_request_text TEXT NOT NULL,
+  requested_title VARCHAR(512) NOT NULL,
+  normalized_query VARCHAR(512) NOT NULL,
+  matched_song_id INT DEFAULT NULL,
+  match_method ENUM(
+    'exact',
+    'normalized_exact',
+    'script_exact',
+    'alias_exact',
+    'alias_script',
+    'ambiguous',
+    'unmatched',
+    'manual'
+  ) NOT NULL,
+  match_confidence DECIMAL(5,4) DEFAULT NULL,
+  status ENUM(
+    'observed',
+    'needs_match',
+    'queued',
+    'active',
+    'completed',
+    'rejected',
+    'cancelled',
+    'skipped',
+    'failed'
+  ) NOT NULL,
+  fulfillment_type ENUM('undecided','sung','played') NOT NULL DEFAULT 'undecided',
+  queue_order BIGINT UNSIGNED DEFAULT NULL,
+  reason VARCHAR(500) DEFAULT NULL,
+  version INT UNSIGNED NOT NULL DEFAULT 0,
+  requested_at DATETIME(3) NOT NULL,
+  activated_at DATETIME(3) DEFAULT NULL,
+  completed_at DATETIME(3) DEFAULT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY unique_song_request_public_id (public_id),
+  UNIQUE KEY unique_song_request_source_event (source_event_id),
+  UNIQUE KEY unique_song_request_idempotency (requester_user_id, idempotency_key),
+  UNIQUE KEY unique_song_request_queue_order (session_id, queue_order),
+  INDEX idx_song_request_current (session_id, status, queue_order),
+  INDEX idx_song_request_observed (site_id, room_id, status, requested_at),
+  INDEX idx_song_request_song (matched_song_id),
+  CONSTRAINT fk_song_request_session FOREIGN KEY (session_id) REFERENCES live_sessions(id) ON DELETE SET NULL,
+  CONSTRAINT fk_song_request_user FOREIGN KEY (requester_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_song_request_song FOREIGN KEY (matched_song_id) REFERENCES songs(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS song_request_history (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  request_id BIGINT UNSIGNED NOT NULL,
+  from_status ENUM(
+    'observed',
+    'needs_match',
+    'queued',
+    'active',
+    'completed',
+    'rejected',
+    'cancelled',
+    'skipped',
+    'failed'
+  ) DEFAULT NULL,
+  to_status ENUM(
+    'observed',
+    'needs_match',
+    'queued',
+    'active',
+    'completed',
+    'rejected',
+    'cancelled',
+    'skipped',
+    'failed'
+  ) DEFAULT NULL,
+  action VARCHAR(50) NOT NULL,
+  actor_user_id INT DEFAULT NULL,
+  reason VARCHAR(500) DEFAULT NULL,
+  metadata JSON DEFAULT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  INDEX idx_song_request_history_request (request_id, created_at, id),
+  INDEX idx_song_request_history_actor (actor_user_id, created_at),
+  CONSTRAINT fk_song_request_history_request FOREIGN KEY (request_id) REFERENCES song_requests(id),
+  CONSTRAINT fk_song_request_history_actor FOREIGN KEY (actor_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS song_aliases (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  song_id INT NOT NULL,
+  alias VARCHAR(512) COLLATE utf8mb4_bin NOT NULL,
+  normalized_alias VARCHAR(512) COLLATE utf8mb4_bin NOT NULL,
+  script_key VARCHAR(512) COLLATE utf8mb4_bin NOT NULL,
+  loose_candidate_key VARCHAR(512) COLLATE utf8mb4_bin NOT NULL,
+  created_by_user_id INT DEFAULT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY unique_song_alias_equivalent (song_id, loose_candidate_key),
+  INDEX idx_song_alias_normalized (normalized_alias, song_id),
+  INDEX idx_song_alias_script (script_key, song_id),
+  CONSTRAINT fk_song_alias_song FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
+  CONSTRAINT fk_song_alias_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
 CREATE TABLE prizes (
   id INT AUTO_INCREMENT PRIMARY KEY,
   name VARCHAR(255) NOT NULL,

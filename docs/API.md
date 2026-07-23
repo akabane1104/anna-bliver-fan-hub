@@ -320,4 +320,105 @@ HMAC-SHA256(
 
 数据库会保存未来明确身份映射所需的 `actor_open_id` 与可选 `actor_union_id`；二者属于平台个人识别资料，应按最小权限、备份保护和保留期限管理。日志只允许事件 ID、类型、站点、房间、模式、处理结果、脱敏错误码和耗时，不记录 open_id、union_id、弹幕/SC 正文、原始包或鉴权资料。
 
-此入口只记录事件：不接受网站用户 Token，不建立用户会话，不调整积分，不创建双队列，不推送 WebSocket，不控制 OBS、播放器或酷狗，也不发送直播弹幕。
+此入口不接受网站用户 Token，不建立用户会话，不调整积分，不推送 WebSocket，不控制 OBS、播放器或酷狗，也不发送直播弹幕。Phase 4C 起，首次 `accepted` 的 `danmaku` 会在同一数据库事务中执行严格点歌观察；只有完整匹配 `点歌 歌名` 或 `點歌 歌名` 的弹幕才派生一条 `song_requests` 记录。普通弹幕、其他七类事件、`duplicate` 与 `event_id_conflict` 均不创建点歌请求。
+
+## 统一点歌 API
+
+公开层只有“点歌”一个概念，不存在“播放”指令或第二条播放队列。观众提交时不能选择唱或播；主播处理请求时才可将内部 `fulfillment_type` 设为 `sung` 或 `played`。
+
+### 指令语法
+
+直播弹幕只接受以下完整单行格式：
+
+```text
+^(点歌|點歌)[ \t\u3000]+(.+?)$
+```
+
+前缀与歌名之间至少有一个半形空格、Tab 或全形空格。`点歌年轮`、`点歌：年轮`、`播放 年轮`、`我想点歌 年轮` 和空歌名均不识别。原始弹幕与原始请求歌名会保留；简繁转换只生成匹配键，不修改显示内容。
+
+### 网站用户点歌
+
+```http
+POST /api/song-requests
+Authorization: Bearer <website JWT>
+Idempotency-Key: <8-128 character stable key>
+Content-Type: application/json
+```
+
+```json
+{
+  "site_id": "main-site",
+  "room_id": "123456",
+  "query": "年輪"
+}
+```
+
+也可以提交属于当前场次歌单的 `song_id`；`song_id` 与 `query` 至少提供一个。请求必须来自已登录网站用户，并且目标必须存在 `open` 场次。`requester_user_id` 只从服务器登录状态取得，Body 中的用户 ID、open_id、角色、积分或 `fulfillment_type` 会被严格 Schema 拒绝。
+
+相同用户重放相同 `Idempotency-Key` 与相同规范化请求时返回 `200 duplicate`；同一 Key 对应不同请求时返回 `409 idempotency_key_conflict`。首次建立返回 `201 accepted`。请求不扣积分、不发送 B站弹幕、不调用旧 Bot，也不控制 OBS 或播放器。
+
+### 当前安全队列
+
+```http
+GET /api/song-requests/current?site_id=main-site&room_id=123456
+```
+
+该接口无需登录，只返回场次公开 ID、标题、状态，以及请求公开 ID、请求歌名、匹配歌曲公开资料、请求者显示名、状态、`fulfillment_type`、排序号和请求时间。不会返回 open_id、网站用户 ID、数据库内部 ID、邮箱、Token、Cookie、钱包、管理员备注或原始直播事件。
+
+### 直播中控
+
+以下路由均要求网站登录，并且用户是管理员或具有 `live_control.manage` 权限。代码只提供权限检查，不会自动向任何正式用户写入该权限。
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `POST /api/live-control/sessions` | 建立 `draft` 场次 |
+| `GET /api/live-control/sessions/current` | 按明确 `site_id`、`room_id` 查询当前场次 |
+| `POST /api/live-control/sessions/:publicId/open` | 开启 draft 或恢复 paused 场次 |
+| `POST /api/live-control/sessions/:publicId/pause` | 暂停 open 场次 |
+| `POST /api/live-control/sessions/:publicId/resume` | 恢复 paused 场次 |
+| `POST /api/live-control/sessions/:publicId/close` | 关闭未结束场次 |
+| `GET /api/live-control/sessions/:publicId/requests` | 查询场次请求 |
+| `PUT /api/live-control/sessions/:publicId/reorder` | 事务内批量重排 |
+| `GET /api/live-control/requests/observed` | 查询尚未归属场次的 observed 请求 |
+| `POST /api/live-control/requests` | 人工新增请求 |
+| `POST /api/live-control/requests/:publicId/assign` | 将 observed 请求指派到未关闭场次 |
+| `POST /api/live-control/requests/:publicId/match` | 人工选择歌单内歌曲 |
+| `POST /api/live-control/requests/:publicId/accept-unmatched` | 明确接受未匹配歌名 |
+| `POST /api/live-control/requests/:publicId/reject` | 拒绝请求 |
+| `POST /api/live-control/requests/:publicId/cancel` | 取消请求 |
+| `POST /api/live-control/requests/:publicId/activate` | 标记处理中 |
+| `POST /api/live-control/requests/:publicId/fulfillment` | 选择 `sung` 或 `played` |
+| `POST /api/live-control/requests/:publicId/complete` | 完成请求 |
+| `POST /api/live-control/requests/:publicId/skip` | 跳过请求 |
+| `POST /api/live-control/requests/:publicId/fail` | 标记失败 |
+| `POST /api/live-control/requests/:publicId/requeue` | 将 failed 请求重新排队 |
+| `GET /api/live-control/songs/:id/aliases` | 查询歌曲别名 |
+| `POST /api/live-control/songs/:id/aliases` | 新增歌曲别名 |
+| `DELETE /api/live-control/aliases/:id` | 删除别名，不改历史请求 |
+
+所有状态变更、匹配、排序、`fulfillment_type` 与场次归属变化都会写入不可变 `song_request_history`。API 不提供历史修改或删除路由。
+
+### 并发与稳定错误
+
+状态变更与重排请求必须提交当前 `expected_version`。过期版本返回 `409 version_conflict`。重排列表必须恰好包含该场次所有 `needs_match` 与 `queued` 请求，各一次；不能包含 active、终态、重复项或其他场次请求。
+
+常用稳定错误码：
+
+| HTTP | `code` | 含义 |
+| --- | --- | --- |
+| `400` | `invalid_idempotency_key` | 缺少或错误的网站幂等键 |
+| `401` | 现有认证错误 | 未登录或 JWT 无效 |
+| `403` | 现有权限错误 | 缺少管理员或 `live_control.manage` 权限 |
+| `409` | `no_open_session` | 网站点歌时没有 open 场次 |
+| `409` | `idempotency_key_conflict` | 幂等键已用于不同请求 |
+| `409` | `version_conflict` | 乐观并发版本过期 |
+| `409` | `active_session_exists` | 同一站点与房间已有 open/paused 场次 |
+| `409` | `invalid_session_transition` | 场次状态转换非法 |
+| `409` | `invalid_request_transition` | 请求状态转换非法 |
+| `409` | `fulfillment_type_required` | 完成前未选择 sung 或 played |
+| `409` | `match_confirmation_required` | ambiguous/observed 请求未经明确人工确认 |
+| `422` | `invalid_request` | 严格请求 Schema 校验失败 |
+| `422` | `song_not_in_session_playlist` | 歌曲不属于场次指定歌单 |
+| `422` | `invalid_reorder_set` | 重排集合不完整、重复或跨场次 |
+
+平台 `open_id` 可存于内部请求记录，属于平台个人识别资料；它不与数字 UID 建立外键，也不会通过公开队列返回。网站用户 ID 只能来自经过验证的登录状态，二者不会按昵称或头像推测映射。
