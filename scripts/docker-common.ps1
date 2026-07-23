@@ -117,15 +117,66 @@ function Assert-ComposeEnv {
     return $values
 }
 
+function Invoke-NativeCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [string[]]$ArgumentList = @(),
+        [string]$DisplayName = $FilePath
+    )
+
+    $stderrFile = [IO.Path]::GetTempFileName()
+    $previousErrorActionPreference = $ErrorActionPreference
+    $stdout = @()
+    $exitCode = $null
+
+    try {
+        try {
+            # Native stderr is diagnostic output; success is determined by ExitCode.
+            $ErrorActionPreference = 'Continue'
+            $stdout = @(& $FilePath @ArgumentList 2> $stderrFile)
+            $exitCode = $LASTEXITCODE
+        }
+        finally {
+            $ErrorActionPreference = $previousErrorActionPreference
+        }
+
+        $stderrLineCount = 0
+        if (Test-Path -LiteralPath $stderrFile) {
+            $stderrLineCount = @(
+                Get-Content -LiteralPath $stderrFile -ErrorAction SilentlyContinue |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            ).Count
+        }
+
+        if ($null -eq $exitCode) {
+            throw "$DisplayName 未返回原生命令退出码。"
+        }
+        if ($exitCode -ne 0) {
+            throw "$DisplayName 执行失败，退出码：$exitCode；已捕获 $stderrLineCount 行 stderr，内容已省略。"
+        }
+
+        if ($stdout.Count -gt 0) {
+            $stdout
+        }
+        if ($stderrLineCount -gt 0) {
+            Write-Warning "$DisplayName 已成功完成（退出码 0），并产生 $stderrLineCount 行已脱敏的 stderr 警告。"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $stderrFile -Force -ErrorAction SilentlyContinue
+    }
+}
+
 function Assert-DockerAvailable {
     if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
         throw '找不到 docker 命令，请先启动 Docker Desktop 并确认 docker compose 可用。'
     }
 
-    & docker info --format '{{.ServerVersion}}' | Out-Null
-    if ($LASTEXITCODE -ne 0) {
-        throw 'Docker Engine 当前不可用，请确认 Docker Desktop 已完成启动。'
-    }
+    Invoke-NativeCommand `
+        -FilePath 'docker' `
+        -ArgumentList @('info', '--format', '{{.ServerVersion}}') `
+        -DisplayName 'docker info' |
+        Out-Null
 }
 
 function Invoke-DockerCompose {
@@ -135,8 +186,8 @@ function Invoke-DockerCompose {
     )
 
     $dockerArguments = @('compose', '--env-file', $EnvFile, '--file', $script:ComposeFile) + $Arguments
-    & docker @dockerArguments
-    if ($LASTEXITCODE -ne 0) {
-        throw "docker compose 执行失败，退出码：$LASTEXITCODE"
-    }
+    Invoke-NativeCommand `
+        -FilePath 'docker' `
+        -ArgumentList $dockerArguments `
+        -DisplayName 'docker compose'
 }
