@@ -133,3 +133,17 @@ open_id 属于平台个人识别资料，只保存在内部数据库，不通过
 ## 后续阶段
 
 全站简体/繁体界面切换属于未来独立阶段，本阶段没有实现。OBS Overlay、主播本地 Helper、酷狗适配器、私有中控台和真实 B站沉默监听器也不属于本阶段。
+
+## Phase 4D 离线契约验证
+
+离线模拟器通过真实签名 HTTP 入口验证以下既有规则，不改变状态机或匹配逻辑：
+
+- `点歌 年轮` 精确匹配，“點歌 年輪”通过简繁键匹配并保留原文。
+- 普通聊天、`播放 年轮` 和 `点歌年轮` 不建立请求。
+- 不存在的歌名进入 `needs_match`，不会猜测其他歌曲。
+- `fancy` 与 `FANCY` 分别精确匹配，`Fancy` 保持 ambiguous。
+- duplicate、conflict、非 danmaku 不重复建立请求。
+- 相同歌曲由不同观众请求时保留独立且稳定递增的队列项。
+- 受控数据库失败时 live_event 与 song_request 在同一事务中回滚。
+
+模拟器仍然只验证单一统一点歌队列。公开层不存在“播放”指令，唱或播继续由主播通过内部 `fulfillment_type` 决定。详见 [LIVE_EVENT_SIMULATOR.md](LIVE_EVENT_SIMULATOR.md)。

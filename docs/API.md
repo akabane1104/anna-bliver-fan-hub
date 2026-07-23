@@ -422,3 +422,11 @@ GET /api/song-requests/current?site_id=main-site&room_id=123456
 | `422` | `invalid_reorder_set` | 重排集合不完整、重复或跨场次 |
 
 平台 `open_id` 可存于内部请求记录，属于平台个人识别资料；它不与数字 UID 建立外键，也不会通过公开队列返回。网站用户 ID 只能来自经过验证的登录状态，二者不会按昵称或头像推测映射。
+
+## Phase 4D 离线事件模拟
+
+`tools/live-event-simulator` 通过真实 loopback HTTP 请求验证 `POST /api/internal/live-events/v1/ingest`。它直接复用本节既有的 Header、原始 JSON bytes、HMAC-SHA256、严格事件 Schema 与 ACK 语义，不定义第二套事件协议。
+
+模拟器只接受 `http://127.0.0.1`、`http://localhost` 和受支持的 IPv6 loopback，不接受 preview、正式域名或局域网地址。Secret 只能由进程环境变量提供，不接受网站 Token、CLI 参数或 fixture 中的值。完整使用方法与场景见 [LIVE_EVENT_SIMULATOR.md](LIVE_EVENT_SIMULATOR.md)。
+
+Phase 4D 没有新增公开 API，也没有改变点歌、幂等、积分或错误响应规则。

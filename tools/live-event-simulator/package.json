@@ -1,0 +1,17 @@
+{
+  "name": "chengzhi-live-event-simulator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Loopback-only simulator for signed Live Control events",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dry-run": "node src/cli.js dry-run",
+    "test": "node --test test/*.test.js",
+    "test:unit": "node --test test/signer.test.js test/urlSafety.test.js test/redaction.test.js test/eventFactory.test.js test/cli.test.js test/cleanup.test.js",
+    "test:e2e": "node --test test/e2e.test.js",
+    "check": "node --check src/cli.js && node --check src/eventFactory.js && node --check src/httpClient.js && node --check src/redaction.js && node --check src/runner.js && node --check src/scenarios.js && node --check src/signer.js && node --check test/helpers/cleanupCoordinator.js"
+  }
+}

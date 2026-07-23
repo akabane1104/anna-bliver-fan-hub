@@ -1,0 +1,26 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${PHASE4D_DB_ROOT_PASSWORD:?required}
+      MYSQL_DATABASE: anna_bliver_fan_hub
+      MYSQL_USER: phase4d
+      MYSQL_PASSWORD: ${PHASE4D_DB_PASSWORD:?required}
+    ports:
+      - target: 3306
+        published: "0"
+        host_ip: 127.0.0.1
+        protocol: tcp
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - MYSQL_PWD="$$MYSQL_ROOT_PASSWORD" mysqladmin ping -h 127.0.0.1 -uroot --silent
+      interval: 2s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    volumes:
+      - phase4d_mysql_data:/var/lib/mysql
+
+volumes:
+  phase4d_mysql_data:

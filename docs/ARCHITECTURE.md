@@ -154,3 +154,18 @@ backend 仍是唯一数据库写入者。首次 accepted 的 `danmaku` 与其派
 `song_requests.requester_open_id` 与网站 `requester_user_id` 保持隔离：open_id 不连接数字 UID，也不按显示名推测网站用户。公开队列只使用 public ID 和安全显示字段。全部管理操作需要管理员或 `live_control.manage` 权限，并写入不可变 history；本阶段不自动向正式用户授予权限。
 
 本阶段不修改前端，不建立全站简繁切换，不连接真实 B站，不调整积分，不依赖旧 Bot，不发送弹幕，也不控制 OBS、酷狗或本地 Helper。当前实现可在未启用正式事件入口、未迁移正式数据库时作为影子代码接受审核。
+
+## Phase 4D 离线模拟边界
+
+Phase 4D 在 `tools/live-event-simulator` 提供独立的 loopback-only 测试客户端。它使用 Node.js 内建 crypto 对原始 JSON bytes 签名，再通过真实 HTTP Middleware、Schema、Controller、Service 和隔离 MySQL 交易验证 Phase 4B 到 Phase 4C 的边界。
+
+模拟器不导入 Backend Controller 或 Service 来替代 HTTP 验收，也不直接连接 MySQL。测试夹具负责建立和断言专属临时数据库；事件产生的业务写入仍只经过 Backend。隔离 Backend 从空临时工作目录启动，不读取正式 `.env`，并只允许合成 target。
+
+```
+synthetic fixture -> signer -> loopback HTTP -> Live Event API
+                                             -> live_events
+                                             -> strict 点歌 parser
+                                             -> song_requests + history
+```
+
+该工具不加入正式 Docker Compose，不改变现有三个服务的启动方式，不连接 B站、Cloudflare 或远程域名。未来沉默 listener 可以重用事件工厂、签名契约与脱敏边界，但必须独立实现官方连接、心跳和重连。
