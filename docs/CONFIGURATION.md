@@ -21,6 +21,17 @@
 
 生产启动会验证 JWT、CORS 和代理配置。开发环境未配置 CORS 时只允许 `localhost:3000` 与 `127.0.0.1:3000`。
 
+## Live Control 密钥
+
+| 变量 | 必需 | 默认值 | 说明 |
+| --- | --- | --- | --- |
+| `LIVE_EVENT_REF_SECRET` | 是（管理事件记录） | 空 | opaque `event_ref` 专用密钥，至少 32 bytes；缺少或不合格时相关权威边界安全失败 |
+| `LIVE_EVENT_INGEST_SECRET` | 是（仅启用事件入口时） | 空 | Listener 向 Backend 投递事件的 HMAC 密钥，至少 32 bytes |
+
+两个密钥用途不同，不得互相共用，也不得复用 `JWT_SECRET` 或数据库密码。Docker
+初始化脚本会在缺少 `LIVE_EVENT_REF_SECRET` 时安全生成，已有非空值不会被轮替；
+`LIVE_EVENT_INGEST_SECRET` 仍保持空白，直到另行授权启用 Listener。
+
 ## 站点默认值
 
 管理员保存到 `settings` 表的值优先于以下变量。

@@ -19,7 +19,7 @@ Node.js 与 npm 只用于宿主机测试；容器构建固定使用现有 `packa
 .\scripts\docker-start.ps1 -Initialize
 ```
 
-`-Initialize` 只会在 `.env` 不存在时创建它，并为 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`JWT_SECRET` 生成各自独立的随机值。脚本不会覆盖已有 `.env`，也不会创建默认管理员密码。
+`-Initialize` 在 `.env` 不存在时创建它，并为 `MYSQL_ROOT_PASSWORD`、`MYSQL_PASSWORD`、`JWT_SECRET` 与 `LIVE_EVENT_REF_SECRET` 生成各自独立的随机值。`LIVE_EVENT_REF_SECRET` 使用至少 32 bytes 的安全随机值；已有非空值不会在重跑时轮替。脚本不会显示密钥全文，也不会创建默认管理员密码。
 
 启动完成后访问：
 

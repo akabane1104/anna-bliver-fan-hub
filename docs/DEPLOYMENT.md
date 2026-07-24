@@ -46,6 +46,10 @@ FLUSH PRIVILEGES;
 回退及禁止破坏性删表的流程见
 [数据库版本迁移](SCHEMA_MIGRATIONS.md)。
 
+Backend Docker image 包含 `backend/migrations` catalog，但 Compose 不会自动执行
+既有数据库升级。使用 Compose 时先只启动健康的 MySQL，再通过 Backend image
+明确执行 `preflight`、`apply` 与 `postcheck`；任一步骤非零都必须停止部署。
+
 ## 生产环境变量
 
 至少设置：
@@ -58,6 +62,7 @@ DB_USER=fan_hub
 DB_PASSWORD=<strong-database-password>
 DB_NAME=anna_bliver_fan_hub
 JWT_SECRET=<at-least-32-random-characters>
+LIVE_EVENT_REF_SECRET=<independent-at-least-32-byte-random-secret>
 JWT_EXPIRES_IN=24h
 PORT=5000
 TRUST_PROXY=1
@@ -70,6 +75,11 @@ REQUEST_BODY_LIMIT=4mb
 ```bash
 openssl rand -base64 48
 ```
+
+`LIVE_EVENT_REF_SECRET` 用于管理事件的 opaque reference，必须与
+`LIVE_EVENT_INGEST_SECRET`、`JWT_SECRET` 和数据库密码完全独立。Compose 初始化
+脚本会在缺少时生成且不会轮替已有非空值；不要在日志、Git 或命令行参数中显示它。
+网站首发仍保持 `LIVE_EVENT_INGEST_ENABLED=false`，不要求启用 B站 Listener。
 
 单层 Nginx 反向代理使用 `TRUST_PROXY=1`；后端直接暴露时使用 `0`。Cloudflare、负载均衡器和 Nginx 叠加时，必须按真实可信跳数配置，不能猜测。
 

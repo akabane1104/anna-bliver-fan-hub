@@ -66,33 +66,62 @@ function New-RandomSecret {
     return [Convert]::ToBase64String($bytes)
 }
 
+function Set-DotEnvValue {
+    param(
+        [Parameter(Mandatory = $true)][string]$Content,
+        [Parameter(Mandatory = $true)][string]$Name,
+        [Parameter(Mandatory = $true)][string]$Value,
+        [switch]$OnlyIfMissingOrEmpty
+    )
+
+    $pattern = '(?m)^' + [Regex]::Escape($Name) + '=(.*)$'
+    $match = [Regex]::Match($Content, $pattern)
+    if ($match.Success) {
+        if ($OnlyIfMissingOrEmpty -and -not [string]::IsNullOrWhiteSpace($match.Groups[1].Value)) {
+            return $Content
+        }
+        return [Regex]::Replace($Content, $pattern, $Name + '=' + $Value, 1)
+    }
+
+    $separator = if ($Content.EndsWith("`n")) { '' } else { [Environment]::NewLine }
+    return $Content + $separator + $Name + '=' + $Value + [Environment]::NewLine
+}
+
 function Initialize-ComposeEnv {
     param([Parameter(Mandatory = $true)][string]$EnvFile)
-
-    if (Test-Path -LiteralPath $EnvFile) {
-        throw "环境文件已存在，不会覆盖：$EnvFile"
-    }
 
     $exampleFile = Join-Path $script:RepositoryRoot '.env.example'
     if (-not (Test-Path -LiteralPath $exampleFile)) {
         throw "找不到环境变量模板：$exampleFile"
     }
 
-    $content = Get-Content -Raw -LiteralPath $exampleFile -Encoding UTF8
-    $replacements = @{
-        MYSQL_ROOT_PASSWORD = (New-RandomSecret -ByteCount 48)
-        MYSQL_PASSWORD = (New-RandomSecret -ByteCount 48)
-        JWT_SECRET = (New-RandomSecret -ByteCount 64)
+    $existing = Test-Path -LiteralPath $EnvFile
+    $content = if ($existing) {
+        Get-Content -Raw -LiteralPath $EnvFile -Encoding UTF8
+    }
+    else {
+        Get-Content -Raw -LiteralPath $exampleFile -Encoding UTF8
     }
 
-    foreach ($name in $replacements.Keys) {
-        $pattern = '(?m)^' + [Regex]::Escape($name) + '=.*$'
-        $content = [Regex]::Replace($content, $pattern, $name + '=' + $replacements[$name])
+    if (-not $existing) {
+        $content = Set-DotEnvValue -Content $content -Name 'MYSQL_ROOT_PASSWORD' -Value (New-RandomSecret -ByteCount 48)
+        $content = Set-DotEnvValue -Content $content -Name 'MYSQL_PASSWORD' -Value (New-RandomSecret -ByteCount 48)
+        $content = Set-DotEnvValue -Content $content -Name 'JWT_SECRET' -Value (New-RandomSecret -ByteCount 64)
     }
+    $updated = Set-DotEnvValue `
+        -Content $content `
+        -Name 'LIVE_EVENT_REF_SECRET' `
+        -Value (New-RandomSecret -ByteCount 48) `
+        -OnlyIfMissingOrEmpty
 
-    $utf8WithoutBom = [Text.UTF8Encoding]::new($false)
-    [IO.File]::WriteAllText($EnvFile, $content, $utf8WithoutBom)
-    Write-Host "已生成本机环境文件：$EnvFile"
+    if (-not $existing -or $updated -cne $content) {
+        $utf8WithoutBom = [Text.UTF8Encoding]::new($false)
+        [IO.File]::WriteAllText($EnvFile, $updated, $utf8WithoutBom)
+        Write-Host "已初始化本机环境文件：$EnvFile"
+    }
+    else {
+        Write-Host "环境文件已包含 LIVE_EVENT_REF_SECRET，保持现有值：$EnvFile"
+    }
 }
 
 function Assert-ComposeEnv {
@@ -103,15 +132,27 @@ function Assert-ComposeEnv {
     }
 
     $values = Get-DotEnvValues -EnvFile $EnvFile
-    foreach ($name in @('MYSQL_ROOT_PASSWORD', 'MYSQL_PASSWORD', 'JWT_SECRET')) {
+    foreach ($name in @('MYSQL_ROOT_PASSWORD', 'MYSQL_PASSWORD', 'JWT_SECRET', 'LIVE_EVENT_REF_SECRET')) {
         $value = Get-DotEnvValue -Values $values -Name $name
-        if ([string]::IsNullOrWhiteSpace($value) -or $value -match '(?i)replace[_-]?with|change[_-]?me|example[_-]?password') {
+        if ([string]::IsNullOrWhiteSpace($value) -or $value -match '(?i)replace[_-]?with|change[_-]?me|example[_-]?(?:password|secret)') {
             throw "$name 仍为空或使用示例占位值，请先在 $EnvFile 中设置安全随机值。"
         }
     }
 
     if ((Get-DotEnvValue -Values $values -Name 'JWT_SECRET').Length -lt 32) {
         throw 'JWT_SECRET 至少需要 32 个字符。'
+    }
+
+    $referenceSecret = Get-DotEnvValue -Values $values -Name 'LIVE_EVENT_REF_SECRET'
+    if ([Text.Encoding]::UTF8.GetByteCount($referenceSecret) -lt 32) {
+        throw 'LIVE_EVENT_REF_SECRET 至少需要 32 bytes。'
+    }
+
+    foreach ($name in @('MYSQL_ROOT_PASSWORD', 'MYSQL_PASSWORD', 'JWT_SECRET', 'LIVE_EVENT_INGEST_SECRET')) {
+        $otherSecret = Get-DotEnvValue -Values $values -Name $name
+        if (-not [string]::IsNullOrWhiteSpace($otherSecret) -and $referenceSecret -ceq $otherSecret) {
+            throw "LIVE_EVENT_REF_SECRET 不得与 $name 共用。"
+        }
     }
 
     return $values

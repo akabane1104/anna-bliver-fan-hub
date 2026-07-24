@@ -49,6 +49,10 @@ contract。SQL 文件名、contract 名称、唯一版本、依赖顺序或 cata
 都会 fail closed；不会加载任意路径、符号链接或未知 SQL。迁移按版本稳定排序，
 在同一数据库 advisory lock 内依次执行。
 
+Backend 最终 Docker image 将该目录复制到 `/app/migrations`，与 Runner 从
+`/app/src/migrations/../../migrations` 解析出的实际位置一致。Compose 只提供
+catalog 和数据库连接环境，不会在 Backend 启动时自动执行 migration。
+
 `202607240002` 明确依赖 `202607240001`。空白／22 表安装先执行 R1，再建立 R4
 索引；已登记 R1 的安装只执行 R4。每一份 migration 只有在 DDL 与独立 postcheck
 成功后才写入自己的 ledger row。R4 失败不会把 `202607240002` 标记为已完成，
@@ -84,6 +88,19 @@ npm run db:migrate:preflight --prefix backend
 npm run db:migrate:apply --prefix backend
 npm run db:migrate:postcheck --prefix backend
 ```
+
+Docker Compose 部署先确认 `.env` 已通过初始化与密钥检查，并只启动目标项目的
+MySQL。随后由最终 Backend image 明确执行：
+
+```bash
+docker compose --env-file .env up -d mysql
+docker compose --env-file .env run --rm --no-deps backend npm run db:migrate:preflight
+docker compose --env-file .env run --rm --no-deps backend npm run db:migrate:apply
+docker compose --env-file .env run --rm --no-deps backend npm run db:migrate:postcheck
+```
+
+这些命令不是自动 migration；执行前仍须备份并确认 Compose project、volume 与
+`DB_NAME` 都指向预期数据库。
 
 命令用途：
 

@@ -7,6 +7,7 @@ RUN npm ci --omit=dev
 
 COPY --chown=node:node backend/src ./src
 COPY --chown=node:node backend/scripts ./scripts
+COPY --chown=node:node backend/migrations ./migrations
 COPY LICENSE NOTICE ./
 
 RUN mkdir -p uploads/branding uploads/prizes \

@@ -88,7 +88,7 @@ Linux、macOS、Git Bash：
 mysql -u root -p < backend/src/config/schema.sql
 ```
 
-SQL 会创建 `anna_bliver_fan_hub` 数据库和 22 张基线表，但不会替你创建 MySQL 登录用户。最简单的本地方式是将后端 `.env` 的 `DB_USER` 改为已有的 MySQL 用户；独立数据库用户及授权命令见 [部署文档](docs/DEPLOYMENT.md#数据库账号)。
+SQL 会为全新空数据库创建 `anna_bliver_fan_hub` 和 27 张业务表，但不会替你创建 MySQL 登录用户。既有数据库不得重跑完整 `schema.sql`，必须先备份，再依次执行 migration 的 `preflight`、`apply` 与 `postcheck`。最简单的本地方式是将后端 `.env` 的 `DB_USER` 改为已有的 MySQL 用户；独立数据库用户、Docker migration 与完整升级流程见 [部署文档](docs/DEPLOYMENT.md#数据库账号)。
 
 ### 3. 创建本地配置
 

@@ -8,7 +8,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'docker-common.ps1')
 
 $resolvedEnvFile = Resolve-ComposeEnvFile -EnvFile $EnvFile
-if ($Initialize -and -not (Test-Path -LiteralPath $resolvedEnvFile)) {
+if ($Initialize) {
     Initialize-ComposeEnv -EnvFile $resolvedEnvFile
 }
 
