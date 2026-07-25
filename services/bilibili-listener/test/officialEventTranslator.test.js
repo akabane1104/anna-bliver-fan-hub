@@ -34,7 +34,7 @@ test('official DM maps through the existing Backend schema with stable msg_id', 
   assert.equal(first.event.received_at, first.event.occurred_at);
 });
 
-test('official gift preserves raw official units and creates no points fields', () => {
+test('official gift preserves units and remains explicitly unprocessed for points', () => {
   const source = translateOfficialCommand(giftCommand(), target);
   const mapped = mapSourceEvent(source.sourceEvent, listenerConfig);
   assert.deepEqual(mapped.event.payload, {
@@ -44,9 +44,97 @@ test('official gift preserves raw official units and creates no points fields', 
     paid: true,
     price: '1000',
     r_price: '2000',
-    price_unit: 'bilibili_price'
+    price_unit: 'bilibili_price',
+    combo_gift: false,
+    points_status: 'not_processed',
+    points_reason: 'official_open_id_account_mapping_unavailable'
   });
-  assert.equal(JSON.stringify(mapped.event).includes('point'), false);
+  assert.equal(mapped.event.actor.union_id, 'synthetic-union-id-2');
+  assert.equal('uid' in mapped.event.actor, false);
+});
+
+test('official combo gifts retain bounded combo metadata without creating points', () => {
+  const command = giftCommand({ msgId: 'synthetic-combo-gift' });
+  command.data.combo_gift = true;
+  command.data.combo_info = {
+    combo_base_num: 5,
+    combo_count: 100,
+    combo_id: 'synthetic-combo-1',
+    combo_timeout: 3
+  };
+  const mapped = mapSourceEvent(
+    translateOfficialCommand(command, target).sourceEvent,
+    listenerConfig
+  );
+  assert.deepEqual(mapped.event.payload.combo_info, command.data.combo_info);
+  assert.equal(mapped.event.payload.points_status, 'not_processed');
+});
+
+test('free gifts, duplicate IDs, uid zero, and equal display names remain safe', () => {
+  const free = giftCommand({ msgId: 'synthetic-free-gift' });
+  free.data.uid = 0;
+  free.data.paid = false;
+  free.data.price = 0;
+  free.data.r_price = 0;
+  free.data.uname = 'same-display-name';
+  const first = mapSourceEvent(
+    translateOfficialCommand(free, target).sourceEvent,
+    listenerConfig
+  );
+  const second = mapSourceEvent(
+    translateOfficialCommand(structuredClone(free), target).sourceEvent,
+    listenerConfig
+  );
+  assert.deepEqual(first.event, second.event);
+  assert.equal(first.event.payload.paid, false);
+  assert.equal(first.event.payload.price, '0');
+  assert.equal('uid' in first.event.actor, false);
+
+  const other = structuredClone(free);
+  other.data.msg_id = 'synthetic-free-gift-other-user';
+  other.data.open_id = 'synthetic-open-id-other';
+  other.data.union_id = '';
+  const mappedOther = mapSourceEvent(
+    translateOfficialCommand(other, target).sourceEvent,
+    listenerConfig
+  );
+  assert.equal(mappedOther.event.actor.display_name, 'same-display-name');
+  assert.notEqual(
+    mappedOther.event.actor.open_id,
+    first.event.actor.open_id
+  );
+  assert.equal('union_id' in mappedOther.event.actor, false);
+});
+
+test('invalid gift quantities, prices, and combo metadata fail closed', () => {
+  const mutations = [
+    (data) => { data.gift_num = 0; },
+    (data) => { data.gift_num = -1; },
+    (data) => { data.gift_num = 1000000001; },
+    (data) => { data.price = -1; },
+    (data) => { data.price = Number.MAX_SAFE_INTEGER + 1; },
+    (data) => {
+      data.combo_gift = true;
+      delete data.combo_info;
+    },
+    (data) => {
+      data.combo_gift = true;
+      data.combo_info = {
+        combo_base_num: 1,
+        combo_count: 1,
+        combo_id: '',
+        combo_timeout: 3
+      };
+    }
+  ];
+  for (const mutate of mutations) {
+    const command = giftCommand();
+    mutate(command.data);
+    assert.throws(
+      () => translateOfficialCommand(command, target),
+      { code: 'invalid_official_event' }
+    );
+  }
 });
 
 test('unsupported commands are ignored while malformed and wrong-room events reject', () => {

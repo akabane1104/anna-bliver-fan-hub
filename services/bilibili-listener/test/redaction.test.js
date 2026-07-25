@@ -70,6 +70,29 @@ test('synchronous and asynchronous log sink failures never escape', async () => 
   await new Promise((resolve) => setImmediate(resolve));
 });
 
+test('high-frequency event logs are bounded per fixed window', () => {
+  const records = [];
+  let now = 1784764800000;
+  const logger = createSafeLogger({
+    sink: (record) => records.push(record),
+    clock: () => now,
+    rateLimitMax: 2,
+    rateLimitWindowMs: 1000
+  });
+  for (let index = 0; index < 5; index += 1) {
+    logger.write('info', 'delivery_result', {
+      result: 'accepted'
+    });
+  }
+  assert.equal(records.length, 2);
+
+  now += 1000;
+  logger.write('info', 'delivery_result', {
+    result: 'accepted'
+  });
+  assert.equal(records.length, 3);
+});
+
 test('status snapshot contains counters and lifecycle fields but no credentials or body', () => {
   let now = 1784764800000;
   const status = new ListenerStatus({ clock: () => now });

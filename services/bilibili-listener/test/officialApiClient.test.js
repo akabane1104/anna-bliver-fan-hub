@@ -8,6 +8,10 @@ const {
   classifyOfficialCode
 } = require('../src/officialApiClient');
 const {
+  getOfficialWssAuthBody,
+  validateOfficialWssLinks
+} = require('../src/officialWssUrl');
+const {
   officialResponse,
   validStartData
 } = require('./helpers/fakeOfficial');
@@ -47,7 +51,16 @@ test('official client fixes origin, path, method, headers, and exact body bytes'
   assert.equal(calls[0].options.headers['Content-Type'], 'application/json');
   assert.match(calls[0].options.headers.Authorization, /^[a-f0-9]{64}$/);
   assert.equal(session.roomId, '123456');
-  assert.equal(session.wssLinks.length, 1);
+  const links = await validateOfficialWssLinks(session.wssTrust, {
+    lookup: async () => [{ address: '93.184.216.34', family: 4 }]
+  });
+  assert.equal(links.length, 1);
+  assert.equal(
+    getOfficialWssAuthBody(session.wssTrust, links[0]),
+    '{"key":"synthetic-auth-body"}'
+  );
+  assert.equal('authBody' in session, false);
+  assert.equal('wssLinks' in session, false);
 });
 
 test('heartbeat and end preserve documented wire types and use new nonces', async () => {

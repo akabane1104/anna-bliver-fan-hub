@@ -15,6 +15,16 @@ const ALLOWED_FIELDS = new Set([
   'error_code',
   'counters'
 ]);
+const RATE_LIMITED_CODES = new Set([
+  'delivery_result',
+  'delivery_retry',
+  'official_event_ignored',
+  'official_event_invalid',
+  'queue_rejected',
+  'source_event_invalid'
+]);
+const DEFAULT_RATE_LIMIT_MAX = 60;
+const DEFAULT_RATE_LIMIT_WINDOW_MS = 60000;
 
 function sanitizeValue(key, value) {
   if (key === 'counters') {
@@ -30,12 +40,16 @@ function sanitizeValue(key, value) {
 
 function createSafeLogger({
   sink = (record) => console.log(JSON.stringify(record)),
-  clock = Date.now
+  clock = Date.now,
+  rateLimitMax = DEFAULT_RATE_LIMIT_MAX,
+  rateLimitWindowMs = DEFAULT_RATE_LIMIT_WINDOW_MS
 } = {}) {
+  const buckets = new Map();
   return {
     write(level, code, fields = {}) {
+      const now = clock();
       const record = {
-        timestamp: new Date(clock()).toISOString(),
+        timestamp: new Date(now).toISOString(),
         level: ['debug', 'info', 'warn', 'error'].includes(level) ? level : 'info',
         code: safeErrorCode({ code }, 'listener_event'),
         component: 'bilibili-listener'
@@ -44,6 +58,25 @@ function createSafeLogger({
         if (ALLOWED_FIELDS.has(key)) record[key] = sanitizeValue(key, value);
       }
       const frozenRecord = Object.freeze(record);
+      if (
+        RATE_LIMITED_CODES.has(record.code) &&
+        Number.isInteger(rateLimitMax) &&
+        rateLimitMax > 0 &&
+        Number.isInteger(rateLimitWindowMs) &&
+        rateLimitWindowMs > 0
+      ) {
+        let bucket = buckets.get(record.code);
+        if (
+          !bucket ||
+          now < bucket.startedAt ||
+          now - bucket.startedAt >= rateLimitWindowMs
+        ) {
+          bucket = { startedAt: now, count: 0 };
+          buckets.set(record.code, bucket);
+        }
+        bucket.count += 1;
+        if (bucket.count > rateLimitMax) return frozenRecord;
+      }
       try {
         const result = sink(frozenRecord);
         if (result && typeof result.catch === 'function') {
@@ -59,6 +92,9 @@ function createSafeLogger({
 
 module.exports = {
   ALLOWED_FIELDS,
+  DEFAULT_RATE_LIMIT_MAX,
+  DEFAULT_RATE_LIMIT_WINDOW_MS,
+  RATE_LIMITED_CODES,
   createSafeLogger,
   sanitizeValue
 };

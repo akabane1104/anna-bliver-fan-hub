@@ -1,10 +1,11 @@
+const path = require('node:path');
 const {
   ROOM_ID_PATTERN,
   SITE_ID_PATTERN
 } = require('../../../backend/src/utils/liveEventConfig');
 const { isPlaceholderSecret } = require('../../../backend/src/config/runtimeConfig');
 const { listenerError } = require('./errors');
-const { assertLoopbackBaseUrl } = require('./urlSafety');
+const { assertBackendBaseUrl } = require('./urlSafety');
 
 const INSTANCE_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/;
 const MODES = new Set(['dry-run', 'test', 'production']);
@@ -38,11 +39,41 @@ const NUMERIC_SETTINGS = Object.freeze({
   queueMaxLength: Object.freeze({
     env: 'LISTENER_QUEUE_MAX_LENGTH', fallback: 1000, min: 1, max: 10000
   }),
+  spoolMaxEntries: Object.freeze({
+    env: 'LISTENER_SPOOL_MAX_ENTRIES',
+    fallback: 10000,
+    min: 1,
+    max: 1000000
+  }),
   deliveryConcurrency: Object.freeze({
     env: 'LISTENER_DELIVERY_CONCURRENCY', fallback: 1, min: 1, max: 4
   }),
   shutdownDrainTimeoutMs: Object.freeze({
     env: 'LISTENER_SHUTDOWN_DRAIN_TIMEOUT_MS', fallback: 10000, min: 100, max: 120000
+  }),
+  spoolMaxBytes: Object.freeze({
+    env: 'LISTENER_SPOOL_MAX_BYTES',
+    fallback: 64 * 1024 * 1024,
+    min: 64 * 1024,
+    max: 1024 * 1024 * 1024
+  }),
+  spoolMaxEntryBytes: Object.freeze({
+    env: 'LISTENER_SPOOL_MAX_ENTRY_BYTES',
+    fallback: 64 * 1024,
+    min: 4096,
+    max: 1024 * 1024
+  }),
+  durableRetryDelayMs: Object.freeze({
+    env: 'LISTENER_DURABLE_RETRY_DELAY_MS',
+    fallback: 30000,
+    min: 1000,
+    max: 300000
+  }),
+  ingestDisabledRetryMs: Object.freeze({
+    env: 'LISTENER_INGEST_DISABLED_RETRY_MS',
+    fallback: 60000,
+    min: 5000,
+    max: 600000
   })
 });
 
@@ -98,6 +129,17 @@ function parseInteger(value, definition) {
   return parsed;
 }
 
+function parseBoolean(value, name, {
+  fallback = false
+} = {}) {
+  const raw = value === undefined || value === null || value === ''
+    ? String(fallback)
+    : String(value).trim().toLowerCase();
+  if (raw === 'true') return true;
+  if (raw === 'false') return false;
+  throw listenerError(`invalid_${name.toLowerCase()}`);
+}
+
 function loadListenerConfig(env = {}, {
   mode = 'production',
   overrides = {}
@@ -112,6 +154,9 @@ function loadListenerConfig(env = {}, {
   const backendUrl = String(
     overrides.backendUrl ?? env.LISTENER_BACKEND_URL ?? ''
   ).trim();
+  const dataDir = String(
+    overrides.dataDir ?? env.LISTENER_DATA_DIR ?? ''
+  ).trim();
   const secret = String(env.LIVE_EVENT_INGEST_SECRET || '');
 
   if (!SITE_ID_PATTERN.test(siteId)) throw listenerError('invalid_listener_site_id');
@@ -119,7 +164,7 @@ function loadListenerConfig(env = {}, {
     throw listenerError('invalid_listener_instance_id');
   }
   if (!ROOM_ID_PATTERN.test(roomId)) throw listenerError('invalid_listener_room_id');
-  const parsedBackendUrl = assertLoopbackBaseUrl(backendUrl);
+  const parsedBackendUrl = assertBackendBaseUrl(backendUrl);
 
   if (
     mode !== 'dry-run' &&
@@ -130,6 +175,9 @@ function loadListenerConfig(env = {}, {
     )
   ) {
     throw listenerError('invalid_ingest_secret');
+  }
+  if (mode === 'production' && (!dataDir || !path.isAbsolute(dataDir))) {
+    throw listenerError('invalid_listener_data_dir');
   }
 
   const numeric = {};
@@ -153,8 +201,48 @@ function loadListenerConfig(env = {}, {
     instanceId,
     roomId,
     backendUrl: parsedBackendUrl.origin,
+    dataDir: dataDir || null,
     secret,
     ...numeric
+  });
+}
+
+function loadListenerServiceConfig(env = {}) {
+  const listenerEnabled = parseBoolean(
+    env.BILIBILI_LISTENER_ENABLED,
+    'bilibili_listener_enabled'
+  );
+  const officialApiEnabled = parseBoolean(
+    env.BILIBILI_OFFICIAL_API_ENABLED,
+    'bilibili_official_api_enabled'
+  );
+  const officialWssEnabled = parseBoolean(
+    env.BILIBILI_OFFICIAL_WSS_ENABLED,
+    'bilibili_official_wss_enabled'
+  );
+  const backendIngestEnabled = parseBoolean(
+    env.LIVE_EVENT_INGEST_ENABLED,
+    'live_event_ingest_enabled'
+  );
+  const giftAutoCreditEnabled = parseBoolean(
+    env.BILIBILI_GIFT_AUTO_CREDIT_ENABLED,
+    'bilibili_gift_auto_credit_enabled'
+  );
+  if (giftAutoCreditEnabled) {
+    throw listenerError('gift_auto_credit_not_authorized');
+  }
+  if (
+    listenerEnabled &&
+    (!officialApiEnabled || !officialWssEnabled || !backendIngestEnabled)
+  ) {
+    throw listenerError('listener_feature_gate_incomplete');
+  }
+  return Object.freeze({
+    listenerEnabled,
+    officialApiEnabled,
+    officialWssEnabled,
+    backendIngestEnabled,
+    giftAutoCreditEnabled
   });
 }
 
@@ -248,6 +336,8 @@ module.exports = {
   OFFICIAL_NUMERIC_SETTINGS,
   canonicalSafeInteger,
   loadListenerConfig,
+  loadListenerServiceConfig,
   loadOfficialBilibiliConfig,
+  parseBoolean,
   parseInteger
 };

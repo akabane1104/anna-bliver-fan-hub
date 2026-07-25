@@ -7,11 +7,14 @@
   "engines": {
     "node": ">=20"
   },
+  "dependencies": {
+    "zod": "3.25.76"
+  },
   "scripts": {
-    "start": "node --experimental-websocket src/cli.js start",
+    "start": "node --experimental-websocket src/cli.js service",
     "dry-run": "node src/cli.js dry-run",
     "test": "node --test --test-concurrency=1 test/*.test.js",
-    "test:unit": "node --test test/config.test.js test/urlSafety.test.js test/mapper.test.js test/delivery.test.js test/queue.test.js test/supervisor.test.js test/redaction.test.js test/cli.test.js",
+    "test:unit": "node --test test/config.test.js test/urlSafety.test.js test/mapper.test.js test/delivery.test.js test/durableSpool.test.js test/instanceLock.test.js test/dockerfile.test.js test/queue.test.js test/supervisor.test.js test/redaction.test.js test/cli.test.js",
     "test:integration": "node --test test/integration.test.js test/dryRun.test.js test/officialIntegration.test.js",
     "test:official": "node --test test/officialAdapter.test.js test/officialApiClient.test.js test/officialConfig.test.js test/officialEventTranslator.test.js test/officialProtocol.test.js test/officialSecurity.test.js test/officialSigner.test.js test/officialWssUrl.test.js",
     "test:e2e:official": "node --test test/officialE2e.test.js",

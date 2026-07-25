@@ -20,6 +20,7 @@ class ListenerStatus {
     this.connectionGeneration = 0;
     this.lastConnectedAt = null;
     this.lastDeliverySuccessAt = null;
+    this.degradedReason = null;
     this.counters = Object.fromEntries(COUNTER_NAMES.map((name) => [name, 0]));
   }
 
@@ -39,17 +40,28 @@ class ListenerStatus {
     this.lastDeliverySuccessAt = new Date(this.clock()).toISOString();
   }
 
+  markDegraded(reason) {
+    this.degradedReason = String(reason || 'listener_degraded');
+  }
+
+  clearDegraded() {
+    this.degradedReason = null;
+  }
+
   increment(name, amount = 1) {
     if (!Object.prototype.hasOwnProperty.call(this.counters, name)) return;
     this.counters[name] += amount;
   }
 
-  snapshot(queueDepth = 0) {
+  snapshot(queueDepth = 0, spool = null) {
     return Object.freeze({
       state: this.state,
+      degraded: this.degradedReason !== null,
+      degraded_reason: this.degradedReason,
       uptime_ms: Math.max(0, this.clock() - this.startedAtMs),
       connection_generation: this.connectionGeneration,
       queue_depth: queueDepth,
+      ...(spool ? { spool } : {}),
       ...this.counters,
       last_connected_at: this.lastConnectedAt,
       last_delivery_success_at: this.lastDeliverySuccessAt

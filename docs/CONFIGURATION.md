@@ -32,6 +32,22 @@
 初始化脚本会在缺少 `LIVE_EVENT_REF_SECRET` 时安全生成，已有非空值不会被轮替；
 `LIVE_EVENT_INGEST_SECRET` 仍保持空白，直到另行授权启用 Listener。
 
+## B站 Listener
+
+Listener 的 `BILIBILI_LISTENER_ENABLED`、`BILIBILI_OFFICIAL_API_ENABLED`、
+`BILIBILI_OFFICIAL_WSS_ENABLED` 与 Backend 的 `LIVE_EVENT_INGEST_ENABLED`
+是四个独立 gate，默认都为 `false`。Disabled Listener 可健康运行，但不会读取
+B站凭据或建立网络连接。
+
+正式启用还需要 `BILIBILI_APP_ID`、`BILIBILI_ACCESS_KEY_ID`、
+`BILIBILI_ACCESS_KEY_SECRET`、`BILIBILI_IDENTITY_CODE`、
+`LISTENER_SITE_ID`、`LISTENER_INSTANCE_ID` 与 `LISTENER_ROOM_ID`。
+这些值只写入受保护的 repository `.env`，不得写入 Git 或命令行。
+
+`BILIBILI_GIFT_AUTO_CREDIT_ENABLED` 必须保持 `false`。目前没有经过证据确认的
+`open_id` 网站账号映射，礼物只做可靠入库和幂等，不自动增加积分。完整契约见
+[B站 Listener](BILIBILI_LISTENER.md)。
+
 ## 站点默认值
 
 管理员保存到 `settings` 表的值优先于以下变量。

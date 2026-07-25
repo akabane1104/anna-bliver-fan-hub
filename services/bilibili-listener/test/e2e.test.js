@@ -11,7 +11,19 @@ const { loadListenerConfig } = require('../src/config');
 const { DeliveryClient } = require('../src/deliveryClient');
 const { ListenerSupervisor } = require('../src/listenerSupervisor');
 const { createSafeLogger } = require('../src/logger');
+const {
+  OPERATIONS,
+  encodePacket
+} = require('../src/officialProtocol');
+const { createProductionRuntime } = require('../src/productionRuntime');
 const { createSyntheticAdapter } = require('../src/syntheticAdapter');
+const {
+  FakeWebSocket,
+  danmakuCommand,
+  giftCommand,
+  officialResponse,
+  validStartData
+} = require('./helpers/fakeOfficial');
 const {
   SYNTHETIC_INSTANCE_ID,
   SYNTHETIC_ROOM_ID,
@@ -182,6 +194,14 @@ function assertLoopbackPortReleased(port) {
   });
 }
 
+async function waitFor(predicate, attempts = 500) {
+  for (let index = 0; index < attempts; index += 1) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  assert.fail('isolated official runtime did not reach the expected state');
+}
+
 function fixtureSql() {
   return `
 USE anna_bliver_fan_hub;
@@ -217,6 +237,25 @@ INSERT INTO live_sessions (
   '${SYNTHETIC_ROOM_ID}',
   @phase4e_playlist_id,
   'Phase 4E Synthetic Session',
+  'open',
+  @phase4e_admin_id,
+  UTC_TIMESTAMP(3)
+);
+INSERT INTO live_sessions (
+  public_id,
+  site_id,
+  room_id,
+  playlist_id,
+  title,
+  status,
+  created_by_user_id,
+  started_at
+) VALUES (
+  '66666666-6666-4666-8666-666666666666',
+  '${SYNTHETIC_SITE_ID}',
+  '123456',
+  @phase4e_playlist_id,
+  'Phase 4F Official Synthetic Session',
   'open',
   @phase4e_admin_id,
   UTC_TIMESTAMP(3)
@@ -274,6 +313,41 @@ SELECT JSON_OBJECT(
 `;
 }
 
+function officialAssertionSql() {
+  return `
+USE anna_bliver_fan_hub;
+SELECT JSON_OBJECT(
+  'live_events', (SELECT COUNT(*) FROM live_events),
+  'song_requests', (SELECT COUNT(*) FROM song_requests),
+  'history', (SELECT COUNT(*) FROM song_request_history),
+  'official_dm_once', (
+    SELECT COUNT(*) = 1
+    FROM live_events
+    WHERE event_id = 'bilibili:123456:phase4f-official-dm'
+  ),
+  'official_gift_once', (
+    SELECT COUNT(*) = 1
+    FROM live_events
+    WHERE event_id = 'bilibili:123456:phase4f-official-gift'
+  ),
+  'official_queue_once', (
+    SELECT COUNT(*) = 1
+    FROM song_requests
+    WHERE source_event_id = 'bilibili:123456:phase4f-official-dm'
+      AND source = 'bilibili_danmaku'
+  ),
+  'official_gift_queue_absent', (
+    SELECT COUNT(*) = 0
+    FROM song_requests
+    WHERE source_event_id = 'bilibili:123456:phase4f-official-gift'
+  ),
+  'wallets', (SELECT COUNT(*) FROM point_wallets),
+  'accounts', (SELECT COUNT(*) FROM point_accounts),
+  'transactions', (SELECT COUNT(*) FROM point_account_transactions)
+) AS report;
+`;
+}
+
 test('silent listener delivers synthetic events through isolated Backend and MySQL', {
   timeout: 110000
 }, async () => {
@@ -290,11 +364,13 @@ test('silent listener delivers synthetic events through isolated Backend and MyS
   let backend = null;
   let backendLogs = '';
   let supervisor = null;
+  let officialRuntime = null;
   let databasePort = null;
   let backendPort = null;
 
   const cleanup = createCleanupCoordinator([
     async () => {
+      if (officialRuntime) await officialRuntime.stop();
       if (supervisor) await supervisor.stop();
     },
     async () => {
@@ -415,7 +491,8 @@ test('silent listener delivers synthetic events through isolated Backend and MyS
         LIVE_EVENT_INGEST_SECRET: ingestSecret,
         LIVE_EVENT_MAX_SKEW_SECONDS: '300',
         LIVE_EVENT_ALLOWED_TARGETS:
-          `${SYNTHETIC_SITE_ID}:${SYNTHETIC_ROOM_ID}`
+          `${SYNTHETIC_SITE_ID}:${SYNTHETIC_ROOM_ID},` +
+          `${SYNTHETIC_SITE_ID}:123456`
       },
       silent: true
     });
@@ -554,13 +631,142 @@ test('silent listener delivers synthetic events through isolated Backend and MyS
       assert.equal(Number(report[key]), 1, key);
     }
 
+    await supervisor.stop();
+    supervisor = null;
+    const officialCalls = {
+      start: 0,
+      heartbeat: 0,
+      end: 0,
+      backend: 0,
+      lookup: 0
+    };
+    const officialSockets = [];
+    class IsolatedOfficialWebSocket extends FakeWebSocket {
+      constructor(url) {
+        super();
+        this.url = url;
+        officialSockets.push(this);
+      }
+    }
+    officialRuntime = createProductionRuntime({
+      source: 'bilibili-official',
+      env: {
+        LISTENER_SITE_ID: SYNTHETIC_SITE_ID,
+        LISTENER_INSTANCE_ID: 'phase4f-official-e2e',
+        LISTENER_ROOM_ID: '123456',
+        LISTENER_BACKEND_URL: `http://127.0.0.1:${backendPort}`,
+        LISTENER_DATA_DIR: path.join(safeCwd, 'official-spool'),
+        LIVE_EVENT_INGEST_SECRET: ingestSecret,
+        LIVE_EVENT_INGEST_ENABLED: 'true',
+        BILIBILI_LISTENER_ENABLED: 'true',
+        BILIBILI_OFFICIAL_API_ENABLED: 'true',
+        BILIBILI_OFFICIAL_WSS_ENABLED: 'true',
+        BILIBILI_GIFT_AUTO_CREDIT_ENABLED: 'false',
+        BILIBILI_APP_ID: '1000000000001',
+        BILIBILI_ACCESS_KEY_ID: 'synthetic-access-key',
+        BILIBILI_ACCESS_KEY_SECRET: 'synthetic-official-secret-32-bytes',
+        BILIBILI_IDENTITY_CODE: 'synthetic-identity-code'
+      },
+      logger: createSafeLogger({
+        sink: (record) => listenerLogs.push(record)
+      }),
+      lookup: async () => {
+        officialCalls.lookup += 1;
+        return [{ address: '93.184.216.34', family: 4 }];
+      },
+      webSocketImpl: IsolatedOfficialWebSocket,
+      async fetchImpl(url, options) {
+        const parsed = new URL(url);
+        if (parsed.origin === 'https://live-open.biliapi.com') {
+          if (parsed.pathname === '/v2/app/start') {
+            officialCalls.start += 1;
+            return officialResponse(validStartData({
+              links: ['wss://session-gateway.example.net/sub']
+            }));
+          }
+          if (parsed.pathname === '/v2/app/heartbeat') {
+            officialCalls.heartbeat += 1;
+            return officialResponse({});
+          }
+          if (parsed.pathname === '/v2/app/end') {
+            officialCalls.end += 1;
+            return officialResponse({});
+          }
+          throw new Error('unexpected synthetic official API path');
+        }
+        if (parsed.origin === `http://127.0.0.1:${backendPort}`) {
+          officialCalls.backend += 1;
+          return fetch(url, options);
+        }
+        throw new Error('unexpected synthetic network target');
+      }
+    });
+    await officialRuntime.start();
+    assert.equal(officialSockets.length, 1);
+    officialSockets[0].receive(encodePacket({
+      operation: OPERATIONS.MESSAGE,
+      body: Buffer.from(JSON.stringify(danmakuCommand({
+        msgId: 'phase4f-official-dm',
+        message: '点歌 年轮'
+      })))
+    }));
+    officialSockets[0].receive(encodePacket({
+      operation: OPERATIONS.MESSAGE,
+      body: Buffer.from(JSON.stringify(giftCommand({
+        msgId: 'phase4f-official-gift'
+      })))
+    }));
+    await waitFor(() => officialRuntime.snapshot().accepted === 2);
+    officialSockets[0].receive(encodePacket({
+      operation: OPERATIONS.MESSAGE,
+      body: Buffer.from(JSON.stringify(danmakuCommand({
+        msgId: 'phase4f-official-dm',
+        message: '点歌 年轮'
+      })))
+    }));
+    await waitFor(() => officialRuntime.snapshot().duplicate === 1);
+    assert.equal(officialRuntime.snapshot().spool.pending_count, 0);
+    await officialRuntime.stop();
+    officialRuntime = null;
+    assert.deepEqual(officialCalls, {
+      start: 1,
+      heartbeat: 0,
+      end: 1,
+      backend: 3,
+      lookup: 2
+    });
+
+    const officialReport = JSON.parse(
+      mysqlInput(
+        composeArgs,
+        dockerContext,
+        officialAssertionSql()
+      ).stdout.trim()
+    );
+    assert.equal(Number(officialReport.live_events), 5);
+    assert.equal(Number(officialReport.song_requests), 3);
+    assert.equal(Number(officialReport.history), 3);
+    for (const key of [
+      'official_dm_once',
+      'official_gift_once',
+      'official_queue_once',
+      'official_gift_queue_absent'
+    ]) {
+      assert.equal(Number(officialReport[key]), 1, key);
+    }
+    assert.equal(Number(officialReport.wallets), 0);
+    assert.equal(Number(officialReport.accounts), 0);
+    assert.equal(Number(officialReport.transactions), 0);
+
     const serializedListenerLogs = JSON.stringify(listenerLogs);
     assert.doesNotMatch(serializedListenerLogs, /点歌|phase4e\.synthetic\./);
+    assert.doesNotMatch(serializedListenerLogs, /phase4f-official-(?:dm|gift)/);
     assert.doesNotMatch(serializedListenerLogs, new RegExp(ingestSecret));
     assert.doesNotMatch(backendLogs, /点歌|phase4e\.synthetic\./);
     assert.doesNotMatch(backendLogs, new RegExp(ingestSecret));
     console.log(
-      '[phase4e-e2e] http=201:3,200:1,409:1,500:1 db=3/2/2 points=0/0/0'
+      '[phase4e-e2e] http=201:3,200:1,409:1,500:1 ' +
+      'official=201:2,200:1 db=5/3/3 points=0/0/0'
     );
   } finally {
     process.off('SIGINT', onSigint);

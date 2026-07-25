@@ -123,6 +123,16 @@ test('packet, decompression, recursion, count, and JSON limits are bounded', () 
     }),
     { code: 'invalid_official_proto_compression' }
   );
+  assert.throws(
+    () => parsePackets(bomb, {
+      limits: {
+        ...DEFAULT_LIMITS,
+        maxDecompressedBytes: 4096,
+        maxCompressionRatio: 2
+      }
+    }),
+    { code: 'official_proto_compression_ratio_exceeded' }
+  );
 
   const deep = {};
   let cursor = deep;

@@ -11,6 +11,7 @@ class ListenerSupervisor {
     config,
     adapter,
     deliveryClient,
+    spool = null,
     mapper = mapSourceEvent,
     logger = createSafeLogger(),
     clock = Date.now,
@@ -21,6 +22,7 @@ class ListenerSupervisor {
     this.config = config;
     this.adapter = assertSourceAdapter(adapter);
     this.deliveryClient = deliveryClient;
+    this.spool = spool;
     this.mapper = mapper;
     this.logger = logger;
     this.clock = clock;
@@ -36,6 +38,8 @@ class ListenerSupervisor {
     this.connectAbortController = null;
     this.connectTimeoutTimer = null;
     this.stopPromise = null;
+    this.durableRetryTimers = new Map();
+    this.queuedDurableKeys = new Set();
     this.unsubscribers = [];
     this.disconnectHandledGeneration = null;
     this.pausedForBackpressure = false;
@@ -51,7 +55,10 @@ class ListenerSupervisor {
   }
 
   snapshot() {
-    return this.status.snapshot(this.queue.depth);
+    return this.status.snapshot(
+      this.queue.depth,
+      this.spool ? this.spool.snapshot() : null
+    );
   }
 
   async start() {
@@ -64,6 +71,15 @@ class ListenerSupervisor {
     }
     this.status.transition('starting');
     this.queue.start();
+    if (this.spool) {
+      const pending = this.spool.initialize(
+        (event) => this.deliveryClient.prepare(event)
+      );
+      for (const item of pending) {
+        const queued = this._enqueueDurable(item);
+        if (!queued.accepted) this._scheduleDurableRetry(item);
+      }
+    }
     await this._connect();
     return this.snapshot();
   }
@@ -80,6 +96,7 @@ class ListenerSupervisor {
       this._cancelConnect();
       this._clearReconnectTimer();
       this._clearHeartbeatTimer();
+      this._clearDurableRetryTimers();
       this._unbindAdapter();
       this.queue.stopAccepting();
       try {
@@ -153,6 +170,7 @@ class ListenerSupervisor {
         }
         this.reconnectAttempt = 0;
         this.status.transition('connected');
+        this.status.clearDegraded();
         this.status.markConnected();
         this._armHeartbeat(generation);
         this._handleQueueDepth(this.queue.depth);
@@ -177,6 +195,9 @@ class ListenerSupervisor {
             state: this.status.state,
             error_code: safeErrorCode(error, 'source_connect_failed')
           });
+          this.status.markDegraded(
+            safeErrorCode(error, 'source_connect_failed')
+          );
           if (error?.fatal === true) {
             this.status.transition('fatal');
             return;
@@ -241,30 +262,57 @@ class ListenerSupervisor {
     }
 
     this.status.increment('mapped');
-    let prepared;
+    let item;
     try {
-      prepared = this.deliveryClient.prepare(mapped.event);
+      if (this.spool) {
+        const persisted = this.spool.persist(
+          mapped.event,
+          (event) => this.deliveryClient.prepare(event)
+        );
+        item = persisted.item;
+        if (
+          persisted.status === 'already_pending' &&
+          (
+            this.queuedDurableKeys.has(item.key) ||
+            this.durableRetryTimers.has(item.key)
+          )
+        ) {
+          return { accepted: true, reason: 'already_pending' };
+        }
+      } else {
+        item = {
+          prepared: this.deliveryClient.prepare(mapped.event),
+          eventFingerprint: mapped.eventFingerprint
+        };
+      }
     } catch (error) {
-      this.status.increment('invalid');
+      const reason = safeErrorCode(error, 'invalid_event_schema');
+      if (['spool_full', 'spool_disk_full', 'spool_write_failed'].includes(reason)) {
+        this.status.increment('queue_rejected');
+        this.status.markDegraded(reason);
+        await this._applyBackpressure();
+      } else {
+        this.status.increment('invalid');
+      }
       return {
         accepted: false,
-        reason: safeErrorCode(error, 'invalid_event_schema')
+        reason
       };
     }
-    const queued = this.queue.enqueue({
-      prepared,
-      eventFingerprint: mapped.eventFingerprint
-    });
+    const queued = this.spool
+      ? this._enqueueDurable(item)
+      : this.queue.enqueue(item);
     if (!queued.accepted) {
       this.status.increment('queue_rejected');
       await this._applyBackpressure();
       this.logger.write('warn', 'queue_rejected', {
         state: this.status.state,
-        event_type: prepared.eventType,
+        event_type: item.prepared.eventType,
         event_fingerprint: mapped.eventFingerprint,
         queue_depth: this.queue.depth,
         result: queued.reason
       });
+      if (this.spool) this._scheduleDurableRetry(item);
     }
     return queued;
   }
@@ -294,10 +342,39 @@ class ListenerSupervisor {
     if (result.outcome === 'accepted' || result.outcome === 'duplicate') {
       this.status.increment(result.outcome);
       this.status.markDeliverySuccess();
+      if (this.spool) {
+        try {
+          this.spool.acknowledge(item);
+          this.status.clearDegraded();
+        } catch (error) {
+          this.status.markDegraded(
+            safeErrorCode(error, 'spool_ack_failed')
+          );
+        }
+      }
     } else if (result.outcome === 'conflict') {
       this.status.increment('conflict');
+      this._quarantineDurable(item, 'event_id_conflict');
+    } else if (
+      result.outcome === 'permanent_rejection' ||
+      result.outcome === 'permanent_failure'
+    ) {
+      this.status.increment('failed');
+      this._quarantineDurable(item, result.reason);
+    } else if (result.outcome === 'authentication_failed') {
+      this.status.increment('failed');
+      this.status.markDegraded('ingest_authentication_failed');
+    } else if (result.outcome === 'ingest_disabled') {
+      this.status.increment('failed');
+      this.status.markDegraded('ingest_disabled');
+      this._scheduleDurableRetry(
+        item,
+        this.config.ingestDisabledRetryMs
+      );
     } else {
       this.status.increment('failed');
+      this.status.markDegraded(result.reason || 'delivery_failed');
+      this._scheduleDurableRetry(item);
     }
     this.logger.write(
       result.outcome === 'failed' ? 'error' : 'info',
@@ -310,6 +387,57 @@ class ListenerSupervisor {
       }
     );
     return result;
+  }
+
+  _enqueueDurable(item) {
+    if (this.queuedDurableKeys.has(item.key)) {
+      return { accepted: true, reason: 'already_queued' };
+    }
+    const queued = this.queue.enqueue(item);
+    if (!queued.accepted) return queued;
+    this.queuedDurableKeys.add(item.key);
+    queued.completion.finally(() => {
+      this.queuedDurableKeys.delete(item.key);
+    });
+    return queued;
+  }
+
+  _scheduleDurableRetry(
+    item,
+    delay = this.config.durableRetryDelayMs
+  ) {
+    if (
+      !this.spool ||
+      this.durableRetryTimers.has(item.key) ||
+      ['stopping', 'stopped'].includes(this.status.state)
+    ) {
+      return;
+    }
+    const timer = this.setTimer(() => {
+      this.durableRetryTimers.delete(item.key);
+      if (['stopping', 'stopped'].includes(this.status.state)) return;
+      const queued = this._enqueueDurable(item);
+      if (!queued.accepted) this._scheduleDurableRetry(item, delay);
+    }, delay);
+    this.durableRetryTimers.set(item.key, timer);
+  }
+
+  _clearDurableRetryTimers() {
+    for (const timer of this.durableRetryTimers.values()) {
+      this.clearTimer(timer);
+    }
+    this.durableRetryTimers.clear();
+  }
+
+  _quarantineDurable(item, reason) {
+    if (!this.spool) return;
+    try {
+      this.spool.quarantine(item, reason);
+    } catch (error) {
+      this.status.markDegraded(
+        safeErrorCode(error, 'spool_quarantine_failed')
+      );
+    }
   }
 
   _handleHeartbeat(generation) {

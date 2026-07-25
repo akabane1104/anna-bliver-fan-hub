@@ -53,6 +53,9 @@ function actorFromSource(sourceEvent) {
   }
   return {
     open_id: actor.open_id,
+    ...(actor.union_id === undefined
+      ? {}
+      : { union_id: actor.union_id }),
     ...(actor.display_name === undefined
       ? {}
       : { display_name: actor.display_name })
@@ -130,7 +133,13 @@ function mapSourceEvent(sourceEvent, config, {
         ...(sourceEvent.data?.r_price === undefined
           ? {}
           : { r_price: sourceEvent.data.r_price }),
-        price_unit: 'bilibili_price'
+        price_unit: 'bilibili_price',
+        combo_gift: sourceEvent.data?.combo_gift === true,
+        ...(sourceEvent.data?.combo_gift === true
+          ? { combo_info: sourceEvent.data.combo_info }
+          : {}),
+        points_status: 'not_processed',
+        points_reason: 'official_open_id_account_mapping_unavailable'
       }
     };
 

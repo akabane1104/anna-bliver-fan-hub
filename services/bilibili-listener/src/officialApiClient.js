@@ -4,6 +4,9 @@ const {
   serializeOfficialBody,
   signOfficialRequest
 } = require('./officialApiSigner');
+const {
+  createOfficialWssSessionTrust
+} = require('./officialWssUrl');
 
 const OFFICIAL_API_ORIGIN = 'https://live-open.biliapi.com';
 const OFFICIAL_API_PATHS = Object.freeze({
@@ -226,9 +229,11 @@ function validateStartData(data) {
   );
   return Object.freeze({
     gameId,
-    authBody,
     roomId: normalizedRoomId,
-    wssLinks: Object.freeze([...wssLinks])
+    wssTrust: createOfficialWssSessionTrust({
+      authBody,
+      wssLinks
+    })
   });
 }
 

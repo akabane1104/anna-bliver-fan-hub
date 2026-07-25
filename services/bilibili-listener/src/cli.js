@@ -3,10 +3,13 @@
 const { safeErrorCode, listenerError } = require('./errors');
 const { runDryRun } = require('./dryRun');
 const { createProductionRuntime } = require('./productionRuntime');
+const { createServiceRuntime } = require('./serviceRuntime');
 
 function parseArguments(argv) {
   const [mode, ...rest] = argv;
-  if (!['dry-run', 'start'].includes(mode)) throw listenerError('invalid_listener_mode');
+  if (!['dry-run', 'start', 'service'].includes(mode)) {
+    throw listenerError('invalid_listener_mode');
+  }
   let json = false;
   let source = null;
   for (const token of rest) {
@@ -33,7 +36,8 @@ function parseArguments(argv) {
     }
     throw listenerError('invalid_argument');
   }
-  if (mode === 'dry-run' && source) throw listenerError('invalid_argument');
+  if (mode !== 'start' && source) throw listenerError('invalid_argument');
+  if (mode === 'start' && !source) throw listenerError('invalid_argument');
   return { mode, json, source };
 }
 
@@ -92,17 +96,20 @@ async function main(
     processLike = process,
     env = process.env,
     dryRun = runDryRun,
-    productionRuntimeFactory = createProductionRuntime
+    productionRuntimeFactory = createProductionRuntime,
+    serviceRuntimeFactory = createServiceRuntime
   } = {}
 ) {
   const wantsJson = argv.includes('--json');
   try {
     const options = parseArguments(argv);
-    if (options.mode === 'start') {
-      const runtime = productionRuntimeFactory({
-        source: options.source,
-        env
-      });
+    if (['start', 'service'].includes(options.mode)) {
+      const runtime = options.mode === 'service'
+        ? serviceRuntimeFactory({ env })
+        : productionRuntimeFactory({
+          source: options.source,
+          env
+        });
       let resolveStopped;
       const stopped = new Promise((resolve) => {
         resolveStopped = resolve;
@@ -117,8 +124,10 @@ async function main(
       try {
         await runtime.start();
         printResult({
-          status: 'running',
-          source: options.source
+          status: options.mode === 'service'
+            ? runtime.snapshot().state
+            : 'running',
+          source: options.source || 'bilibili-official'
         }, options.json, stdout);
         await stopped;
         return Number(processLike.exitCode || 0);

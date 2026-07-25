@@ -411,6 +411,14 @@ test('nested unknown fields, numeric UID substitution, and unbounded values are 
   invalidAvatar.actor.avatar_url = 'not-a-valid-url';
   fixtures.push(invalidAvatar);
 
+  const paddedOpenId = baseEvent('danmaku', 326);
+  paddedOpenId.actor.open_id = ' padded-open-id ';
+  fixtures.push(paddedOpenId);
+
+  const paddedUnionId = baseEvent('danmaku', 327);
+  paddedUnionId.actor.union_id = ' padded-union-id ';
+  fixtures.push(paddedUnionId);
+
   for (const event of fixtures) {
     const response = await sendEvent(harness, event);
     assert.equal(response.status, 422);

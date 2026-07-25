@@ -1,7 +1,4 @@
 const { listenerError } = require('./errors');
-const {
-  assertOfficialWssEvidenceVerified
-} = require('./officialWssUrl');
 
 const REQUIRED_ADAPTER_METHODS = Object.freeze([
   'connect',
@@ -33,7 +30,7 @@ function createProductionAdapter({ source, ...options } = {}) {
     throw listenerError('bilibili_adapter_not_implemented');
   }
   void options;
-  return assertOfficialWssEvidenceVerified();
+  throw listenerError('production_adapter_requires_runtime_factory');
 }
 
 module.exports = {

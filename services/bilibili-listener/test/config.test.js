@@ -1,6 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { loadListenerConfig, NUMERIC_SETTINGS } = require('../src/config');
+const path = require('node:path');
+const {
+  loadListenerConfig,
+  loadListenerServiceConfig,
+  NUMERIC_SETTINGS
+} = require('../src/config');
 const { randomSecret, testConfig } = require('./helpers/testConfig');
 
 test('valid test config resolves explicit env without reading a dotenv file', () => {
@@ -25,6 +30,7 @@ test('production and test modes require a non-placeholder secret', () => {
       LISTENER_INSTANCE_ID: 'phase4e-instance',
       LISTENER_ROOM_ID: '99000000000000000002',
       LISTENER_BACKEND_URL: 'http://localhost:5000',
+      LISTENER_DATA_DIR: path.resolve('synthetic-listener-data'),
       LIVE_EVENT_INGEST_SECRET: secret
     }, { mode: 'production' }), { code: 'invalid_ingest_secret' });
   }
@@ -33,8 +39,31 @@ test('production and test modes require a non-placeholder secret', () => {
     LISTENER_INSTANCE_ID: 'phase4e-instance',
     LISTENER_ROOM_ID: '99000000000000000002',
     LISTENER_BACKEND_URL: 'http://localhost:5000',
+    LISTENER_DATA_DIR: path.resolve('synthetic-listener-data'),
     LIVE_EVENT_INGEST_SECRET: randomSecret()
   }, { mode: 'production' }));
+});
+
+test('service gates are independent and active mode fails closed when incomplete', () => {
+  assert.deepEqual(loadListenerServiceConfig({}), {
+    listenerEnabled: false,
+    officialApiEnabled: false,
+    officialWssEnabled: false,
+    backendIngestEnabled: false,
+    giftAutoCreditEnabled: false
+  });
+  assert.throws(
+    () => loadListenerServiceConfig({
+      BILIBILI_LISTENER_ENABLED: 'true'
+    }),
+    { code: 'listener_feature_gate_incomplete' }
+  );
+  assert.throws(
+    () => loadListenerServiceConfig({
+      BILIBILI_GIFT_AUTO_CREDIT_ENABLED: 'true'
+    }),
+    { code: 'gift_auto_credit_not_authorized' }
+  );
 });
 
 test('dry-run does not require a secret but still requires an explicit safe target', () => {

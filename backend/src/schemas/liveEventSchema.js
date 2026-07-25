@@ -25,7 +25,6 @@ const normalizedIdentifier = (minLength, maxLength, pattern) => z.string()
   .max(maxLength)
   .regex(pattern);
 const platformIdentifier = z.string()
-  .trim()
   .min(1)
   .max(128)
   .regex(/^[^\s\u0000-\u001f\u007f]+$/);
@@ -111,8 +110,39 @@ const liveEventSchema = z.discriminatedUnion('event_type', [
       paid: z.boolean(),
       price: integerString,
       r_price: integerString.optional(),
-      price_unit: z.literal('bilibili_price')
-    }).strict()
+      price_unit: z.literal('bilibili_price'),
+      combo_gift: z.boolean().optional(),
+      combo_info: z.object({
+        combo_base_num: z.number().int().min(1).max(1000000000),
+        combo_count: z.number().int().min(1).max(1000000000),
+        combo_id: sourceIdentifier,
+        combo_timeout: z.number().int().min(0).max(86400)
+      }).strict().optional(),
+      points_status: z.literal('not_processed').optional(),
+      points_reason: z.literal(
+        'official_open_id_account_mapping_unavailable'
+      ).optional()
+    }).strict().superRefine((payload, context) => {
+      if (
+        (payload.combo_gift === true) !== Boolean(payload.combo_info)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['combo_info'],
+          message: 'Combo metadata must match combo_gift'
+        });
+      }
+      if (
+        (payload.points_status === undefined) !==
+        (payload.points_reason === undefined)
+      ) {
+        context.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['points_reason'],
+          message: 'Points status and reason must be provided together'
+        });
+      }
+    })
   ),
   eventSchema(
     'super_chat',

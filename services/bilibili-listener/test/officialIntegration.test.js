@@ -1,109 +1,254 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { main } = require('../src/cli');
-const { createProductionRuntime } = require('../src/productionRuntime');
-const { createProductionAdapter } = require('../src/sourceAdapter');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const {
+  createServiceRuntime
+} = require('../src/serviceRuntime');
+const {
+  createProductionAdapter
+} = require('../src/sourceAdapter');
+const {
+  readHealthSnapshot
+} = require('../src/healthStatus');
 const { withNetworkGuard } = require('./helpers/networkGuard');
 
-function completeOfficialEnv(overrides = {}) {
-  return {
-    LISTENER_SITE_ID: 'synthetic-site',
-    LISTENER_INSTANCE_ID: 'synthetic-instance',
-    LISTENER_ROOM_ID: '123456',
-    LISTENER_BACKEND_URL: 'http://127.0.0.1:5000',
-    LIVE_EVENT_INGEST_SECRET: 'synthetic-backend-secret-32-bytes-long',
-    BILIBILI_APP_ID: '1000000000001',
-    BILIBILI_ACCESS_KEY_ID: 'synthetic-access-key',
-    BILIBILI_ACCESS_KEY_SECRET: 'synthetic-official-secret-32-bytes',
-    BILIBILI_IDENTITY_CODE: 'synthetic-identity-code',
-    ...overrides
-  };
-}
-
-test('all official production factories share the same fail-closed boundary', () => {
-  for (const factory of [
+test('manual production adapter construction remains unavailable', () => {
+  assert.throws(
     () => createProductionAdapter({
       source: 'bilibili-official',
-      url: 'wss://synthetic-unverified.invalid/unverified'
+      url: 'wss://manual.example.net/sub'
     }),
-    () => createProductionRuntime({
-      source: 'bilibili-official',
-      env: completeOfficialEnv()
-    })
-  ]) {
-    assert.throws(factory, (error) => {
-      assert.equal(error.code, 'official_wss_allowlist_unverified');
-      assert.equal(error.fatal, true);
-      assert.equal(error.message, 'Listener operation failed');
-      return true;
+    { code: 'production_adapter_requires_runtime_factory' }
+  );
+});
+
+test('disabled service stays healthy without credentials or network access', async () => {
+  const dataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'listener-disabled-')
+  );
+  let runtimeFactoryCalls = 0;
+  let lockReleases = 0;
+  try {
+    await withNetworkGuard(async (networkCalls) => {
+      const service = createServiceRuntime({
+        env: {
+          LISTENER_DATA_DIR: dataDir,
+          BILIBILI_LISTENER_ENABLED: 'false'
+        },
+        runtimeFactory() {
+          runtimeFactoryCalls += 1;
+          throw new Error('active runtime must not be created');
+        },
+        async lockFactory() {
+          return {
+            async release() {
+              lockReleases += 1;
+            }
+          };
+        },
+        setTimer() {
+          return 1;
+        },
+        clearTimer() {}
+      });
+      const started = await service.start();
+      assert.equal(started.state, 'disabled');
+      assert.equal(started.healthy, true);
+      assert.equal(readHealthSnapshot(dataDir).state, 'disabled');
+      await service.stop();
+      assert.deepEqual(networkCalls, []);
     });
+    assert.equal(runtimeFactoryCalls, 0);
+    assert.equal(lockReleases, 1);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
   }
 });
 
-test('CLI to production runtime integration performs no network or scheduling', async () => {
-  const counts = {
-    fetch: 0,
-    authDiscovery: 0,
-    bootstrap: 0,
-    backendIngest: 0,
-    websocketConstructions: 0,
-    socketFactory: 0,
-    reconnectSchedules: 0
-  };
-  const output = { value: '', write(chunk) { this.value += chunk; } };
-  const exitCode = await withNetworkGuard(async (networkCalls) => {
-    const result = await main(
-      ['start', '--source=bilibili-official', '--json'],
-      {
-        stdout: output,
-        env: completeOfficialEnv({
-          OFFICIAL_WSS_EVIDENCE_VERIFIED: 'true',
-          BILIBILI_WSS_URL: 'wss://synthetic-unverified.invalid/unverified'
-        }),
-        productionRuntimeFactory(options) {
-          return createProductionRuntime({
-            ...options,
-            fetchImpl(url) {
-              counts.fetch += 1;
-              const href = String(url);
-              if (href.includes('/v2/app/start')) {
-                counts.authDiscovery += 1;
-                counts.bootstrap += 1;
-              }
-              if (href.includes('/api/internal/live-events/v1/ingest')) {
-                counts.backendIngest += 1;
-              }
-              throw new Error('fetch must remain unreachable');
-            },
-            webSocketImpl: class {
-              constructor() {
-                counts.socketFactory += 1;
-                counts.websocketConstructions += 1;
-              }
-            },
-            setTimer() {
-              counts.reconnectSchedules += 1;
-            }
-          });
-        }
-      }
+test('invalid service gates stay alive as an unhealthy configuration error', async () => {
+  const dataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'listener-configuration-error-')
+  );
+  let lockReleases = 0;
+  try {
+    const service = createServiceRuntime({
+      env: {
+        LISTENER_DATA_DIR: dataDir,
+        BILIBILI_LISTENER_ENABLED: 'not-a-boolean'
+      },
+      async lockFactory() {
+        return {
+          async release() {
+            lockReleases += 1;
+          }
+        };
+      },
+      setTimer() {
+        return 1;
+      },
+      clearTimer() {}
+    });
+    const started = await service.start();
+    assert.equal(started.state, 'configuration_error');
+    assert.equal(started.healthy, false);
+    const rawHealth = JSON.parse(fs.readFileSync(
+      path.join(dataDir, 'health.json'),
+      'utf8'
+    ));
+    assert.equal(rawHealth.state, 'configuration_error');
+    assert.equal(rawHealth.healthy, false);
+    assert.throws(
+      () => readHealthSnapshot(dataDir),
+      { code: 'listener_unhealthy' }
     );
-    assert.deepEqual(networkCalls, []);
-    return result;
-  });
+    await service.stop();
+    assert.equal(lockReleases, 1);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
 
-  assert.equal(exitCode, 1);
-  assert.deepEqual(JSON.parse(output.value), {
-    status: 'failed',
-    error_code: 'official_wss_allowlist_unverified'
+test('service releases its instance lock when runtime shutdown fails', async () => {
+  const dataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'listener-stop-failure-')
+  );
+  let lockReleases = 0;
+  try {
+    const service = createServiceRuntime({
+      env: {
+        LISTENER_DATA_DIR: dataDir,
+        BILIBILI_LISTENER_ENABLED: 'true',
+        BILIBILI_OFFICIAL_API_ENABLED: 'true',
+        BILIBILI_OFFICIAL_WSS_ENABLED: 'true',
+        LIVE_EVENT_INGEST_ENABLED: 'true',
+        BILIBILI_GIFT_AUTO_CREDIT_ENABLED: 'false'
+      },
+      async lockFactory() {
+        return {
+          async release() {
+            lockReleases += 1;
+          }
+        };
+      },
+      runtimeFactory() {
+        return {
+          async start() {},
+          async stop() {
+            const error = new Error('synthetic shutdown failure');
+            error.code = 'synthetic_stop_failure';
+            throw error;
+          },
+          snapshot() {
+            return {
+              state: 'connected',
+              degraded: false,
+              source: {
+                source_state: 'connected',
+                websocket_authenticated: true
+              }
+            };
+          }
+        };
+      },
+      setTimer() {
+        return 1;
+      },
+      clearTimer() {}
+    });
+    await service.start();
+    await assert.rejects(
+      () => service.stop(),
+      { code: 'synthetic_stop_failure' }
+    );
+    assert.equal(lockReleases, 1);
+    assert.equal(service.snapshot().state, 'stopped');
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('service health distinguishes authenticated, degraded, and expired states', async () => {
+  const serviceEnv = (dataDir) => ({
+    LISTENER_DATA_DIR: dataDir,
+    BILIBILI_LISTENER_ENABLED: 'true',
+    BILIBILI_OFFICIAL_API_ENABLED: 'true',
+    BILIBILI_OFFICIAL_WSS_ENABLED: 'true',
+    LIVE_EVENT_INGEST_ENABLED: 'true',
+    BILIBILI_GIFT_AUTO_CREDIT_ENABLED: 'false'
   });
-  assert.deepEqual(counts, {
-    fetch: 0,
-    authDiscovery: 0,
-    bootstrap: 0,
-    backendIngest: 0,
-    websocketConstructions: 0,
-    socketFactory: 0,
-    reconnectSchedules: 0
-  });
+  const lockFactory = async () => ({ async release() {} });
+
+  const healthyDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'listener-healthy-')
+  );
+  try {
+    let degraded = false;
+    const service = createServiceRuntime({
+      env: serviceEnv(healthyDir),
+      lockFactory,
+      runtimeFactory() {
+        return {
+          async start() {},
+          async stop() {},
+          snapshot() {
+            return {
+              state: 'connected',
+              degraded,
+              degraded_reason: degraded ? 'ingest_disabled' : null,
+              source: {
+                source_state: 'connected',
+                websocket_authenticated: true
+              }
+            };
+          }
+        };
+      },
+      setTimer() {
+        return 1;
+      },
+      clearTimer() {}
+    });
+    assert.equal((await service.start()).state, 'healthy');
+    degraded = true;
+    assert.equal(service.snapshot().state, 'degraded');
+    assert.equal(service.snapshot().healthy, false);
+    await service.stop();
+  } finally {
+    fs.rmSync(healthyDir, { recursive: true, force: true });
+  }
+
+  const expiredDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'listener-expired-')
+  );
+  try {
+    const service = createServiceRuntime({
+      env: serviceEnv(expiredDir),
+      lockFactory,
+      runtimeFactory() {
+        return {
+          async start() {
+            const error = new Error('synthetic expired credential');
+            error.code = 'official_identity_code_error';
+            throw error;
+          },
+          async stop() {},
+          snapshot() {
+            return { state: 'fatal' };
+          }
+        };
+      },
+      setTimer() {
+        return 1;
+      },
+      clearTimer() {}
+    });
+    const started = await service.start();
+    assert.equal(started.state, 'credentials_expired');
+    assert.equal(started.healthy, false);
+    await service.stop();
+  } finally {
+    fs.rmSync(expiredDir, { recursive: true, force: true });
+  }
 });

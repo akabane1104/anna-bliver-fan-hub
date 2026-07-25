@@ -9,7 +9,8 @@ const {
 } = require('./officialProtocol');
 const { translateOfficialCommand } = require('./officialEventTranslator');
 const {
-  assertOfficialWssEvidenceVerified,
+  getOfficialWssAuthBody,
+  revalidateOfficialWssLink,
   validateOfficialWssLinks
 } = require('./officialWssUrl');
 
@@ -53,6 +54,7 @@ class OfficialBilibiliAdapter {
     webSocketFactory,
     logger,
     translator = translateOfficialCommand,
+    lookup,
     clock = Date.now,
     setTimer = setTimeout,
     clearTimer = clearTimeout
@@ -65,6 +67,7 @@ class OfficialBilibiliAdapter {
     this.webSocketFactory = webSocketFactory;
     this.logger = logger || { write() {} };
     this.translator = translator;
+    this.lookup = lookup;
     this.clock = clock;
     this.setTimer = setTimer;
     this.clearTimer = clearTimer;
@@ -83,6 +86,11 @@ class OfficialBilibiliAdapter {
     this.wsHeartbeatReplyTimer = null;
     this.messageChain = Promise.resolve();
     this.disconnectNotifiedGeneration = null;
+    this.websocketAuthenticated = false;
+    this.lastApiHeartbeatSuccessAt = null;
+    this.lastWsHeartbeatReplyAt = null;
+    this.lastPacketAt = null;
+    this.apiHeartbeatFailures = 0;
     this.handlers = {
       event: null,
       heartbeat: null,
@@ -129,12 +137,15 @@ class OfficialBilibiliAdapter {
       source_generation: this.generation,
       session_active: Boolean(this.session && !this.sessionEnded),
       websocket_connected: Boolean(this.socket && this.state === 'connected'),
+      websocket_authenticated: this.websocketAuthenticated,
+      last_rest_heartbeat_success_at: this.lastApiHeartbeatSuccessAt,
+      last_wss_heartbeat_reply_at: this.lastWsHeartbeatReplyAt,
+      last_packet_at: this.lastPacketAt,
       ...this.counters
     });
   }
 
   async connect({ roomId, signal } = {}) {
-    assertOfficialWssEvidenceVerified();
     if (roomId !== this.config.roomId) throw listenerError('source_target_mismatch');
     if (this.connectPromise) return this.connectPromise;
     if (this.state === 'connected') return;
@@ -143,7 +154,11 @@ class OfficialBilibiliAdapter {
     const generation = this.generation + 1;
     this.generation = generation;
     this.disconnectNotifiedGeneration = null;
-    this.state = 'starting';
+    this.websocketAuthenticated = false;
+    this.apiHeartbeatFailures = 0;
+    this.lastApiHeartbeatSuccessAt = null;
+    this.lastWsHeartbeatReplyAt = null;
+    this.state = 'app_starting';
     const controller = new AbortController();
     this.connectionController = controller;
     const onAbort = () => controller.abort();
@@ -157,15 +172,14 @@ class OfficialBilibiliAdapter {
         });
         this.session = startedSession;
         this.sessionEnded = false;
+        this.state = 'app_started';
         if (startedSession.roomId !== this.config.roomId) {
           throw fatalListenerError('official_room_mismatch');
         }
-        let validatedLinks;
-        try {
-          validatedLinks = validateOfficialWssLinks(startedSession.wssLinks);
-        } catch {
-          throw fatalListenerError('invalid_official_wss_links');
-        }
+        const validatedLinks = await validateOfficialWssLinks(
+          startedSession.wssTrust,
+          { lookup: this.lookup }
+        );
         const session = Object.freeze({
           ...startedSession,
           wssLinks: validatedLinks
@@ -182,14 +196,19 @@ class OfficialBilibiliAdapter {
           room_id: this.config.roomId,
           result: 'started'
         });
-        this.state = 'authenticating';
+        this.state = 'wss_connecting';
         let lastError = listenerError('official_wss_connect_failed');
         for (const link of session.wssLinks) {
           if (controller.signal.aborted || generation !== this.generation) {
             throw listenerError('source_connect_aborted');
           }
           try {
-            await this._connectSocket(link, generation, controller.signal);
+            await this._connectSocket(
+              link,
+              generation,
+              controller.signal,
+              session.wssTrust
+            );
             lastError = null;
             break;
           } catch (error) {
@@ -232,6 +251,7 @@ class OfficialBilibiliAdapter {
       const pendingConnect = this.connectPromise;
       this.state = 'stopping';
       this.generation += 1;
+      this.websocketAuthenticated = false;
       this.connectionController?.abort();
       this._cancelHeartbeatTimers();
       this._rejectAuth('source_connect_aborted');
@@ -249,14 +269,19 @@ class OfficialBilibiliAdapter {
     }
   }
 
-  async _connectSocket(link, generation, signal) {
-    assertOfficialWssEvidenceVerified();
+  async _connectSocket(link, generation, signal, wssTrust) {
+    const revalidatedLink = await revalidateOfficialWssLink(
+      wssTrust,
+      link,
+      { lookup: this.lookup }
+    );
     this.counters.wss_link_attempts += 1;
-    const socket = this.webSocketFactory(link.href);
+    const socket = this.webSocketFactory(revalidatedLink.href);
     if (!socket || typeof socket.send !== 'function' || typeof socket.close !== 'function') {
       throw listenerError('invalid_websocket_implementation');
     }
     this.socket = socket;
+    this.state = 'authenticating';
     try {
       socket.binaryType = 'arraybuffer';
     } catch {
@@ -294,7 +319,9 @@ class OfficialBilibiliAdapter {
           return;
         }
         try {
-          socket.send(createAuthPacket(this.session.authBody));
+          socket.send(createAuthPacket(
+            getOfficialWssAuthBody(wssTrust, revalidatedLink)
+          ));
         } catch {
           finish(listenerError('official_auth_send_failed'));
         }
@@ -318,11 +345,16 @@ class OfficialBilibiliAdapter {
           this._signalDisconnect(generation, 'official_wss_error');
         }
       };
-      const onClose = () => {
+      const onClose = (event) => {
         if (this.state === 'authenticating') {
           finish(listenerError('official_wss_closed_before_auth'));
         } else {
-          this._signalDisconnect(generation, 'official_wss_closed');
+          this._signalDisconnect(
+            generation,
+            event?.code === 1000
+              ? 'official_wss_closed_normal'
+              : 'official_wss_closed_abnormal'
+          );
         }
       };
       this.socketCleanup = [
@@ -338,6 +370,7 @@ class OfficialBilibiliAdapter {
     if (generation !== this.generation || ['stopping', 'stopped'].includes(this.state)) {
       return;
     }
+    this.lastPacketAt = new Date(this.clock()).toISOString();
     const packets = parsePackets(await socketDataToBuffer(data));
     for (const packet of packets) {
       if (packet.operation === OPERATIONS.AUTH_REPLY) {
@@ -346,16 +379,22 @@ class OfficialBilibiliAdapter {
           this._rejectAuth('official_auth_rejected');
           continue;
         }
+        this.websocketAuthenticated = true;
+        this.state = 'authenticated';
         this.authWaiter?.resolve();
         continue;
       }
       if (packet.operation === OPERATIONS.HEARTBEAT_REPLY) {
         this.counters.ws_heartbeat_reply += 1;
+        this.lastWsHeartbeatReplyAt = new Date(this.clock()).toISOString();
         this._clearTimer('wsHeartbeatReplyTimer');
         this._emitHeartbeat();
         continue;
       }
-      if (packet.operation !== OPERATIONS.MESSAGE || this.state !== 'connected') {
+      if (
+        packet.operation !== OPERATIONS.MESSAGE ||
+        !['authenticated', 'connected'].includes(this.state)
+      ) {
         continue;
       }
       const message = parseJsonBody(packet.body);
@@ -369,7 +408,7 @@ class OfficialBilibiliAdapter {
           continue;
         }
         this._signalDisconnect(generation, 'official_interaction_end');
-        continue;
+        return;
       }
       let translated;
       try {
@@ -377,11 +416,12 @@ class OfficialBilibiliAdapter {
           roomId: this.config.roomId,
           gameId: this.session.gameId
         });
-      } catch {
+      } catch (error) {
         this.counters.invalid += 1;
         this.logger.write('warn', 'official_event_invalid', {
           state: this.state,
           room_id: this.config.roomId,
+          error_code: safeErrorCode(error, 'invalid_official_event'),
           result: 'invalid'
         });
         continue;
@@ -402,11 +442,15 @@ class OfficialBilibiliAdapter {
     }
   }
 
-  _scheduleApiHeartbeat(generation) {
+  _scheduleApiHeartbeat(
+    generation,
+    delayMs = this.config.apiHeartbeatIntervalMs
+  ) {
     if (generation !== this.generation || this.state !== 'connected') return;
     this.apiHeartbeatTimer = this.setTimer(async () => {
       this.apiHeartbeatTimer = null;
       if (generation !== this.generation || this.state !== 'connected') return;
+      const startedAt = this.clock();
       try {
         await this.apiClient.heartbeat(this.session.gameId, {
           signal: this.connectionController?.signal
@@ -414,6 +458,7 @@ class OfficialBilibiliAdapter {
         if (generation !== this.generation || this.state !== 'connected') return;
         this.counters.api_heartbeat_success += 1;
         this.apiHeartbeatFailures = 0;
+        this.lastApiHeartbeatSuccessAt = new Date(this.clock()).toISOString();
         this._emitHeartbeat();
       } catch (error) {
         if (generation !== this.generation || this.state !== 'connected') return;
@@ -430,8 +475,12 @@ class OfficialBilibiliAdapter {
           return;
         }
       }
-      this._scheduleApiHeartbeat(generation);
-    }, this.config.apiHeartbeatIntervalMs);
+      const elapsed = Math.max(0, this.clock() - startedAt);
+      this._scheduleApiHeartbeat(
+        generation,
+        Math.max(0, this.config.apiHeartbeatIntervalMs - elapsed)
+      );
+    }, delayMs);
   }
 
   _scheduleWsHeartbeat(generation) {
@@ -471,6 +520,7 @@ class OfficialBilibiliAdapter {
       return;
     }
     this.disconnectNotifiedGeneration = generation;
+    this.websocketAuthenticated = false;
     this.counters.disconnect_notifications += 1;
     this._cancelHeartbeatTimers();
     this.logger.write('warn', 'official_source_disconnected', {
@@ -497,6 +547,7 @@ class OfficialBilibiliAdapter {
     }
     const socket = this.socket;
     this.socket = null;
+    this.websocketAuthenticated = false;
     if (close && socket) {
       try {
         socket.close();

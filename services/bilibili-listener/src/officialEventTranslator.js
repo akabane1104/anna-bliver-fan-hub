@@ -65,9 +65,45 @@ function actorFromData(data) {
   const displayName = typeof data?.uname === 'string' && data.uname
     ? safeText(data.uname, { maxBytes: 300 })
     : undefined;
+  const unionId = typeof data?.union_id === 'string' && data.union_id
+    ? safeText(data.union_id, { maxBytes: 128 })
+    : undefined;
+  if (unionId !== undefined && /[\s\u0000-\u001f\u007f]/.test(unionId)) {
+    throw listenerError('invalid_official_event');
+  }
   return Object.freeze({
     open_id: openId,
+    ...(unionId === undefined ? {} : { union_id: unionId }),
     ...(displayName === undefined ? {} : { display_name: displayName })
+  });
+}
+
+function comboFromData(data) {
+  if (data?.combo_gift === undefined || data.combo_gift === false) {
+    return Object.freeze({ combo_gift: false });
+  }
+  if (data.combo_gift !== true) throw listenerError('invalid_official_event');
+  const combo = data.combo_info;
+  if (!combo || typeof combo !== 'object' || Array.isArray(combo)) {
+    throw listenerError('invalid_official_event');
+  }
+  return Object.freeze({
+    combo_gift: true,
+    combo_info: Object.freeze({
+      combo_base_num: safeInteger(combo.combo_base_num, {
+        min: 1,
+        max: 1000000000
+      }),
+      combo_count: safeInteger(combo.combo_count, {
+        min: 1,
+        max: 1000000000
+      }),
+      combo_id: safeIdentifier(combo.combo_id),
+      combo_timeout: safeInteger(combo.combo_timeout, {
+        min: 0,
+        max: 86400
+      })
+    })
   });
 }
 
@@ -140,7 +176,8 @@ function translateOfficialCommand(message, {
           ? data.paid
           : (() => { throw listenerError('invalid_official_event'); })(),
         price: String(safeInteger(data.price)),
-        r_price: String(safeInteger(data.r_price))
+        r_price: String(safeInteger(data.r_price)),
+        ...comboFromData(data)
       })
     })
   });
@@ -150,6 +187,7 @@ module.exports = {
   SOURCE_ID_PATTERN,
   SUPPORTED_COMMANDS,
   actorFromData,
+  comboFromData,
   safeIdentifier,
   timestampToIso,
   translateOfficialCommand

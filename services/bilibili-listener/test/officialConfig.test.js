@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const {
   loadOfficialBilibiliConfig
@@ -15,7 +16,13 @@ function officialEnv(overrides = {}) {
     LISTENER_INSTANCE_ID: 'synthetic-instance',
     LISTENER_ROOM_ID: '123456',
     LISTENER_BACKEND_URL: 'http://127.0.0.1:5000',
+    LISTENER_DATA_DIR: path.join(os.tmpdir(), 'synthetic-listener-config'),
     LIVE_EVENT_INGEST_SECRET: 'synthetic-backend-secret-32-bytes-long',
+    LIVE_EVENT_INGEST_ENABLED: 'true',
+    BILIBILI_LISTENER_ENABLED: 'true',
+    BILIBILI_OFFICIAL_API_ENABLED: 'true',
+    BILIBILI_OFFICIAL_WSS_ENABLED: 'true',
+    BILIBILI_GIFT_AUTO_CREDIT_ENABLED: 'false',
     BILIBILI_APP_ID: '1000000000001',
     BILIBILI_ACCESS_KEY_ID: 'synthetic-access-key',
     BILIBILI_ACCESS_KEY_SECRET: 'synthetic-official-secret-32-bytes',
@@ -84,6 +91,11 @@ test('official source is explicit opt-in and all credential CLI flags are reject
     () => parseArguments(['dry-run', '--source=bilibili-official']),
     { code: 'invalid_argument' }
   );
+  assert.deepEqual(parseArguments(['service']), {
+    mode: 'service',
+    json: false,
+    source: null
+  });
   for (const flag of [
     '--access-key-secret=hidden',
     '--identity-code=hidden',
@@ -95,7 +107,23 @@ test('official source is explicit opt-in and all credential CLI flags are reject
   }
 });
 
-test('CLI official mode fails at the evidence boundary before config or network', async () => {
+test('production runtime cannot bypass disabled service gates', () => {
+  assert.throws(
+    () => createProductionRuntime({
+      source: 'bilibili-official',
+      env: officialEnv({
+        BILIBILI_LISTENER_ENABLED: 'false'
+      }),
+      fetchImpl() {
+        throw new Error('network must not run');
+      },
+      webSocketImpl: class {}
+    }),
+    { code: 'listener_disabled' }
+  );
+});
+
+test('CLI official mode validates config before any network operation', async () => {
   const counts = {
     fetch: 0,
     websocketConstructions: 0,
@@ -139,23 +167,23 @@ test('CLI official mode fails at the evidence boundary before config or network'
   });
   assert.deepEqual(JSON.parse(output.value), {
     status: 'failed',
-    error_code: 'official_wss_allowlist_unverified'
+    error_code: 'invalid_listener_site_id'
   });
 });
 
-test('fixed Node 20 start script enables the built-in WebSocket client', () => {
+test('fixed Node 20 service script enables WebSocket and declares only zod', () => {
   const packageJson = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', 'package.json'),
     'utf8'
   ));
   assert.equal(
     packageJson.scripts.start,
-    'node --experimental-websocket src/cli.js start'
+    'node --experimental-websocket src/cli.js service'
   );
-  assert.deepEqual(packageJson.dependencies, undefined);
+  assert.deepEqual(packageJson.dependencies, { zod: '3.25.76' });
 });
 
-test('complete settings and environment bypass attempts still have zero side effects', () => {
+test('manual WSS environment values never alter runtime construction', () => {
   for (const bypass of [
     {},
     {
@@ -174,8 +202,7 @@ test('complete settings and environment bypass attempts still have zero side eff
       reconnectSchedules: 0
     };
     const sensitiveUrl = 'wss://user:secret@synthetic.invalid/unverified?token=hidden';
-    assert.throws(
-      () => createProductionRuntime({
+    const runtime = createProductionRuntime({
         source: 'bilibili-official',
         env: officialEnv({
           ...bypass,
@@ -202,14 +229,8 @@ test('complete settings and environment bypass attempts still have zero side eff
         setTimer() {
           counts.reconnectSchedules += 1;
         }
-      }),
-      (error) => {
-        assert.equal(error.code, 'official_wss_allowlist_unverified');
-        assert.equal(error.fatal, true);
-        assert.doesNotMatch(error.message, /synthetic|secret|token|wss/i);
-        return true;
-      }
-    );
+      });
+    assert.equal(runtime.source, 'bilibili-official');
     assert.deepEqual(counts, {
       fetch: 0,
       authDiscovery: 0,

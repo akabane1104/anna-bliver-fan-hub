@@ -131,6 +131,53 @@ services:
       retries: 12
       start_period: 10s
 
+  bilibili-listener:
+    image: anna-bliver-fan-hub-listener:phase-4f-b
+    build:
+      context: .
+      dockerfile: services/bilibili-listener/Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      BILIBILI_LISTENER_ENABLED: ${BILIBILI_LISTENER_ENABLED:-false}
+      BILIBILI_OFFICIAL_API_ENABLED: ${BILIBILI_OFFICIAL_API_ENABLED:-false}
+      BILIBILI_OFFICIAL_WSS_ENABLED: ${BILIBILI_OFFICIAL_WSS_ENABLED:-false}
+      BILIBILI_GIFT_AUTO_CREDIT_ENABLED: ${BILIBILI_GIFT_AUTO_CREDIT_ENABLED:-false}
+      BILIBILI_APP_ID: ${BILIBILI_APP_ID:-}
+      BILIBILI_ACCESS_KEY_ID: ${BILIBILI_ACCESS_KEY_ID:-}
+      BILIBILI_ACCESS_KEY_SECRET: ${BILIBILI_ACCESS_KEY_SECRET:-}
+      BILIBILI_IDENTITY_CODE: ${BILIBILI_IDENTITY_CODE:-}
+      LISTENER_SITE_ID: ${LISTENER_SITE_ID:-}
+      LISTENER_INSTANCE_ID: ${LISTENER_INSTANCE_ID:-}
+      LISTENER_ROOM_ID: ${LISTENER_ROOM_ID:-}
+      LISTENER_BACKEND_URL: http://backend:5000
+      LISTENER_DATA_DIR: /var/lib/bilibili-listener
+      LIVE_EVENT_INGEST_ENABLED: ${LIVE_EVENT_INGEST_ENABLED:-false}
+      LIVE_EVENT_INGEST_SECRET: ${LIVE_EVENT_INGEST_SECRET:-}
+    volumes:
+      - listener_data:/var/lib/bilibili-listener
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - src/healthcheck.js
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+
 volumes:
   mysql_data:
   uploads_data:
+  listener_data:

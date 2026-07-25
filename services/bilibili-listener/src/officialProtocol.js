@@ -16,6 +16,7 @@ const OPERATIONS = Object.freeze({
 const DEFAULT_LIMITS = Object.freeze({
   maxFrameBytes: 1024 * 1024,
   maxDecompressedBytes: 4 * 1024 * 1024,
+  maxCompressionRatio: 64,
   maxPacketBytes: 1024 * 1024,
   maxPackets: 128,
   maxDepth: 4,
@@ -166,6 +167,12 @@ function parsePackets(input, {
         });
       } catch {
         throw listenerError('invalid_official_proto_compression');
+      }
+      if (
+        decompressed.length >
+        Math.max(HEADER_LENGTH, body.length * limits.maxCompressionRatio)
+      ) {
+        throw listenerError('official_proto_compression_ratio_exceeded');
       }
       packets.push(...parsePackets(decompressed, {
         limits,

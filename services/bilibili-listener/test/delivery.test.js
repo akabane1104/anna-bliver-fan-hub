@@ -71,6 +71,14 @@ test('ACK classifier matches accepted, duplicate, conflict, transient, and perma
     status: 'rejected',
     reason: 'database_error'
   }).retryable, true);
+  assert.equal(classifyAck(500, {
+    status: 'rejected',
+    reason: 'unexpected_internal_error'
+  }).retryable, true);
+  assert.equal(classifyAck(599, {
+    status: 'rejected',
+    reason: 'unknown_server_error'
+  }).retryable, true);
   assert.equal(classifyAck(503, {
     status: 'rejected',
     reason: 'ingest_unavailable'
@@ -79,6 +87,10 @@ test('ACK classifier matches accepted, duplicate, conflict, transient, and perma
     status: 'rejected',
     reason: 'invalid_event_schema'
   }).retryable, false);
+  assert.equal(classifyAck(422, {
+    status: 'rejected',
+    reason: 'secret=value must not enter health'
+  }).reason, 'schema_invalid');
 });
 
 test('201, 200, and 409 terminate without retries', async () => {
@@ -181,7 +193,7 @@ test('streamed ACK without Content-Length is rejected before exceeding 16 KiB', 
   assert.equal(calls, 1);
 });
 
-test('permanent schema or service configuration errors are not retried', async () => {
+test('disabled ingest is classified distinctly and is not blindly retried', async () => {
   let calls = 0;
   const client = new DeliveryClient({
     config: testConfig(),
@@ -194,7 +206,7 @@ test('permanent schema or service configuration errors are not retried', async (
     }
   });
   const result = await client.deliverPrepared(preparedFixture());
-  assert.equal(result.outcome, 'permanent_failure');
+  assert.equal(result.outcome, 'ingest_disabled');
   assert.equal(calls, 1);
 });
 

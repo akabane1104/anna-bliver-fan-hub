@@ -16,7 +16,7 @@ function outputCollector() {
   };
 }
 
-test('CLI accepts only start/dry-run and the json switch', () => {
+test('CLI accepts only service, explicit-source start, dry-run, and json', () => {
   assert.deepEqual(parseArguments(['dry-run']), {
     mode: 'dry-run',
     json: false,
@@ -27,6 +27,19 @@ test('CLI accepts only start/dry-run and the json switch', () => {
     json: true,
     source: null
   });
+  assert.deepEqual(parseArguments(['service', '--json']), {
+    mode: 'service',
+    json: true,
+    source: null
+  });
+  assert.deepEqual(
+    parseArguments(['start', '--source=bilibili-official']),
+    {
+      mode: 'start',
+      json: false,
+      source: 'bilibili-official'
+    }
+  );
   assert.throws(() => parseArguments(['run']), { code: 'invalid_listener_mode' });
   assert.throws(() => parseArguments(['dry-run', '--fixture', 'external.json']), {
     code: 'invalid_argument'
@@ -53,7 +66,7 @@ test('CLI explicitly rejects secrets and bypass switches', () => {
   }
 });
 
-test('production start fails closed before any network operation', async () => {
+test('production start without an explicit source fails before network', async () => {
   const output = outputCollector();
   const code = await withNetworkGuard(async (networkCalls) => {
     const result = await main(['start', '--json'], {
@@ -65,7 +78,7 @@ test('production start fails closed before any network operation', async () => {
   assert.equal(code, 1);
   assert.deepEqual(JSON.parse(output.read()), {
     status: 'failed',
-    error_code: 'bilibili_adapter_not_implemented'
+    error_code: 'invalid_argument'
   });
 });
 

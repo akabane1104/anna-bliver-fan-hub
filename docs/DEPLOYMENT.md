@@ -81,6 +81,12 @@ openssl rand -base64 48
 脚本会在缺少时生成且不会轮替已有非空值；不要在日志、Git 或命令行参数中显示它。
 网站首发仍保持 `LIVE_EVENT_INGEST_ENABLED=false`，不要求启用 B站 Listener。
 
+Compose 包含独立 `bilibili-listener` service，但所有 gate 默认关闭。Disabled
+部署不会接触 B站，且不会取得 MySQL credential、published port、uploads 或
+backup volume。只有正式凭据、主播身份码、允许 target 与独立 ingest secret
+全部存在时，才可依 [B站 Listener](BILIBILI_LISTENER.md) 的顺序启用 Backend
+ingest 与 Listener；不得使用 Cookie 或手动 WSS URL。
+
 单层 Nginx 反向代理使用 `TRUST_PROXY=1`；后端直接暴露时使用 `0`。Cloudflare、负载均衡器和 Nginx 叠加时，必须按真实可信跳数配置，不能猜测。
 
 ## 安装与构建

@@ -168,7 +168,7 @@ synthetic fixture -> signer -> loopback HTTP -> Live Event API
                                              -> song_requests + history
 ```
 
-该工具不加入正式 Docker Compose，不改变现有三个服务的启动方式，不连接 B站、Cloudflare 或远程域名。未来沉默 listener 可以重用事件工厂、签名契约与脱敏边界，但必须独立实现官方连接、心跳和重连。
+该工具不加入正式 Docker Compose，不改变现有服务的启动方式，不连接 B站、Cloudflare 或远程域名。正式 Listener 已重用事件工厂、签名契约与脱敏边界，并独立实现官方连接、心跳、重连与持久投递。
 
 ## Phase 4E 沉默 Listener 离线骨架
 
@@ -179,16 +179,17 @@ official read-only adapter (offline-validated)
         |
         | decoded source event
         v
-listener supervisor -> mapper -> bounded FIFO -> signed loopback delivery
+listener supervisor -> mapper -> durable spool -> bounded FIFO
                                                      |
                                                      v
-                                     Live Control Event API v1
+                                      signed Backend delivery
 ```
 
-Listener 核心将来源连接重连与 Backend 投递重试完全分离，以 connection generation 排除旧 callback，并使用有界内存队列、显式 backpressure、白名单日志和限时 graceful shutdown。Mapper 直接调用 Backend 现有 Zod validator，不维护第二套事件 Schema；事件只序列化一次，投递重试保持 `event_id` 与 raw body 不变。
+Listener 核心将来源连接重连与 Backend 投递重试完全分离，以 connection generation 排除旧 callback，并使用有界内存队列、持久 spool、显式 backpressure、白名单日志和限时 graceful shutdown。Mapper 直接调用 Backend 现有 Zod validator，不维护第二套事件 Schema；事件只序列化一次，投递重试保持 `event_id` 与 raw body 不变。
 
-当前 Synthetic Adapter 仅供完全离线的 dry-run 与隔离测试使用，不是 B站官方封包实现。`start` 模式只有显式指定 `--source=bilibili-official` 才会选择官方 Adapter；未指定时返回 `bilibili_adapter_not_implemented`，不会回退到合成来源。Listener 不发送弹幕、不操作直播间、不处理点数、不解析点歌命令、不连接 MySQL，也不加入正式 Docker Compose。详细安全边界见 [B站沉默 Listener 文档](BILIBILI_LISTENER.md)。
-## Phase 4F-A 官方只读 Listener 边界
+当前 Synthetic Adapter 仅供完全离线的 dry-run 与隔离测试使用，不是 B站官方封包实现。`start` 模式只有显式指定 `--source=bilibili-official` 才会选择官方 Adapter；未指定时返回 `bilibili_adapter_not_implemented`，不会回退到合成来源。Listener 不发送弹幕、不操作直播间、不自动处理点数、不解析点歌命令，也不连接 MySQL。正式 Compose 包含独立 Listener service，但所有网络与 ingest gate 均默认关闭。详细安全边界见 [B站沉默 Listener 文档](BILIBILI_LISTENER.md)。
+
+## Phase 4F-A/B 官方只读 Listener 边界
 
 `services/bilibili-listener` 现在包含可注入测试的 B站直播开放平台只读
 Adapter。正式数据流保持为：
@@ -197,20 +198,22 @@ Adapter。正式数据流保持为：
 Official start/heartbeat/end + WSS
   -> OfficialBilibiliAdapter
   -> ListenerSupervisor
-  -> bounded in-memory FIFO
+  -> durable spool + bounded in-memory FIFO
   -> existing Backend live-event Zod schema
-  -> signed loopback delivery
+  -> signed internal delivery
   -> Backend (only database writer)
 ```
 
 Official Adapter 只负责 control-plane session、AUTH、两套心跳、Proto 解码和
 DM/Gift Source Event 转换。Supervisor 是唯一 source reconnect 所有者；
 Backend delivery 使用另一套有限重试。Listener 不直连 MySQL、不处理点歌或
-积分、不发送弹幕，也不控制直播间。Phase 4F-A 不修改 Phase 4B/4C/4D 对外
-契约，不加入正式 Compose。由于当前官方资料没有发布可核对的 WSS
-hostname/path allowlist，production factory 以
-`official_wss_allowlist_unverified` 保持关闭；真实 B站连通性与 allowlist
-确认留给独立 Phase 4F-B。
+积分、不发送弹幕，也不控制直播间。Phase 4F-A/B 不修改 Phase 4B/4C/4D
+对外契约。由于当前官方资料没有发布可核对的固定 WSS hostname/path
+allowlist，正式 runtime 只信任同一份已验证 `/v2/app/start` response 中成对
+返回的 `auth_body` 与 `wss_link`；每次连接前仍解析 DNS 并拒绝本机、私有、
+保留或其他非公网地址。手动 URL、跨 session 组合及静态 fallback 一律拒绝。
+Listener service 已加入正式 Compose，但默认保持 disabled，只有 API、WSS、
+Backend ingest 与 Listener gate 全部显式开启后才连接。
 
 ## Phase 4G-B 只读观测后台
 

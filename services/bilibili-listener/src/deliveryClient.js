@@ -2,12 +2,12 @@ const crypto = require('node:crypto');
 const {
   validateLiveEvent
 } = require('../../../backend/src/schemas/liveEventSchema');
-const { listenerError } = require('./errors');
+const { listenerError, safeErrorCode } = require('./errors');
 const {
   deliveryRetryDelay,
   sleepWithSignal
 } = require('./retryPolicy');
-const { assertLoopbackBaseUrl } = require('./urlSafety');
+const { assertBackendBaseUrl } = require('./urlSafety');
 
 const INGEST_PATH = '/api/internal/live-events/v1/ingest';
 const MAX_ACK_BYTES = 16 * 1024;
@@ -112,6 +112,10 @@ function parseAck(text) {
 }
 
 function classifyAck(httpStatus, ack) {
+  const reason = (fallback) => safeErrorCode(
+    { code: ack?.reason },
+    fallback
+  );
   if (httpStatus === 201 && ack?.status === 'accepted') {
     return { outcome: 'accepted', retryable: false };
   }
@@ -125,20 +129,45 @@ function classifyAck(httpStatus, ack) {
   ) {
     return { outcome: 'conflict', retryable: false };
   }
-  if (
-    (httpStatus === 500 && ack?.reason === 'database_error') ||
-    [429, 502, 504].includes(httpStatus)
-  ) {
+  if (httpStatus === 404) {
+    return {
+      outcome: 'ingest_disabled',
+      retryable: false,
+      reason: 'ingest_disabled'
+    };
+  }
+  if ([401, 403].includes(httpStatus)) {
+    return {
+      outcome: 'authentication_failed',
+      retryable: false,
+      reason: reason('ingest_authentication_failed')
+    };
+  }
+  if ([400, 422].includes(httpStatus)) {
+    return {
+      outcome: 'permanent_rejection',
+      retryable: false,
+      reason: reason('schema_invalid')
+    };
+  }
+  if (httpStatus === 503 && ack?.reason === 'ingest_unavailable') {
+    return {
+      outcome: 'ingest_disabled',
+      retryable: false,
+      reason: 'ingest_unavailable'
+    };
+  }
+  if (httpStatus === 429 || (httpStatus >= 500 && httpStatus <= 599)) {
     return {
       outcome: 'temporary_failure',
       retryable: true,
-      reason: ack?.reason || 'temporary_http_error'
+      reason: reason('temporary_http_error')
     };
   }
   return {
     outcome: 'permanent_failure',
     retryable: false,
-    reason: ack?.reason || 'unexpected_ack'
+    reason: reason('unexpected_ack')
   };
 }
 
@@ -173,7 +202,7 @@ class DeliveryClient {
     this.sleep = sleep;
     this.endpoint = new URL(
       INGEST_PATH,
-      assertLoopbackBaseUrl(config.backendUrl)
+      assertBackendBaseUrl(config.backendUrl)
     );
   }
 
@@ -224,6 +253,10 @@ class DeliveryClient {
         };
       }
 
+      if (response.status === 404) {
+        return classifyAck(response.status, null);
+      }
+
       let ack;
       try {
         ack = parseAck(await readAckBody(response, {
@@ -262,13 +295,22 @@ class DeliveryClient {
             httpStatus: response.status
           };
         }
-        if ([429, 500, 502, 504].includes(response.status)) {
+        if (
+          response.status === 429 ||
+          (response.status >= 500 && response.status <= 599)
+        ) {
           return {
             outcome: 'temporary_failure',
             retryable: true,
             reason: 'temporary_http_error',
             httpStatus: response.status
           };
+        }
+        if ([401, 403].includes(response.status)) {
+          return classifyAck(response.status, null);
+        }
+        if ([400, 422].includes(response.status)) {
+          return classifyAck(response.status, null);
         }
         return {
           outcome: 'permanent_failure',

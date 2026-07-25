@@ -67,9 +67,9 @@ class FakeWebSocket extends EventEmitter {
     this.emit('message', { data });
   }
 
-  remoteClose() {
+  remoteClose(code = 1006) {
     this.readyState = 3;
-    this.emit('close', {});
+    this.emit('close', { code });
   }
 
   remoteError() {
@@ -137,6 +137,7 @@ function giftCommand({
     data: {
       room_id: roomId,
       open_id: 'synthetic-open-id-2',
+      union_id: 'synthetic-union-id-2',
       uname: 'synthetic-gift-user',
       gift_id: 100,
       gift_name: 'synthetic gift',
@@ -144,6 +145,7 @@ function giftCommand({
       price: 1000,
       r_price: 2000,
       paid: true,
+      combo_gift: false,
       msg_id: msgId,
       timestamp: 1700000001
     }

@@ -1,6 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const {
+  assertBackendBaseUrl,
   assertLoopbackBaseUrl
 } = require('../src/urlSafety');
 const {
@@ -57,6 +58,25 @@ test('Listener additionally rejects an unusable explicit port zero', () => {
       () => assertLoopbackBaseUrl(value),
       { code: 'remote_backend_rejected' },
       value
+    );
+  }
+});
+
+test('production delivery additionally permits only the exact Compose backend URL', () => {
+  assert.equal(
+    assertBackendBaseUrl('http://backend:5000').href,
+    'http://backend:5000/'
+  );
+  for (const value of [
+    'http://backend',
+    'http://backend:5001',
+    'https://backend:5000',
+    'http://backend:5000/api',
+    'http://backend.evil:5000'
+  ]) {
+    assert.throws(
+      () => assertBackendBaseUrl(value),
+      { code: 'remote_backend_rejected' }
     );
   }
 });
