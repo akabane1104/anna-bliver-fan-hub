@@ -1,3 +1,5 @@
+param([string]$ComposeEnvFile = '')
+
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
@@ -195,11 +197,15 @@ try {
     }
 
     Invoke-Test 'backup and restore scripts enforce metadata flow' {
+        $contractSource = Get-Content -Raw -LiteralPath (Join-Path $scriptsDirectory 'backup-contract.ps1')
         $backupSource = Get-Content -Raw -LiteralPath (Join-Path $scriptsDirectory 'docker-backup.ps1')
         $restoreSource = Get-Content -Raw -LiteralPath (Join-Path $scriptsDirectory 'docker-restore.ps1')
         Assert-True `
-            -Condition $backupSource.Contains('information_schema.SCHEMATA') `
-            -Label 'backup schema metadata query'
+            -Condition $contractSource.Contains('information_schema.SCHEMATA') `
+            -Label 'backup contract schema metadata query'
+        Assert-True `
+            -Condition $backupSource.Contains('Get-DatabaseMetadataComposeArguments') `
+            -Label 'backup metadata argument helper'
         Assert-True `
             -Condition $backupSource.Contains('database-metadata.json') `
             -Label 'backup metadata file'
@@ -212,6 +218,32 @@ try {
         Assert-True `
             -Condition (-not $restoreSource.Contains('--password=')) `
             -Label 'restore command line password exclusion'
+    }
+
+    if (-not [string]::IsNullOrWhiteSpace($ComposeEnvFile)) {
+        . (Join-Path $scriptsDirectory 'docker-common.ps1')
+        $resolvedComposeEnvFile = Resolve-ComposeEnvFile -EnvFile $ComposeEnvFile
+        $composeValues = Assert-ComposeEnv -EnvFile $resolvedComposeEnvFile
+        $expectedDatabase = Get-DotEnvValue `
+            -Values $composeValues `
+            -Name 'MYSQL_DATABASE' `
+            -Default 'anna_bliver_fan_hub'
+        Assert-DockerAvailable
+
+        Invoke-Test 'real Compose metadata query preserves the complete SQL argument' {
+            $rows = @(
+                Invoke-DockerCompose `
+                    -EnvFile $resolvedComposeEnvFile `
+                    -Arguments (Get-DatabaseMetadataComposeArguments) |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            Assert-Equal -Actual $rows.Count -Expected 1 -Label 'Compose metadata row count'
+            $fields = @($rows[0] -split "`t")
+            Assert-Equal -Actual $fields.Count -Expected 3 -Label 'Compose metadata field count'
+            Assert-Equal -Actual $fields[0] -Expected $expectedDatabase -Label 'Compose source database'
+            Assert-Equal -Actual $fields[1] -Expected 'utf8mb4' -Label 'Compose character set'
+            Assert-Equal -Actual $fields[2] -Expected 'utf8mb4_unicode_ci' -Label 'Compose collation'
+        }
     }
 
     Write-Output "RESULT passed=$passed failed=0"

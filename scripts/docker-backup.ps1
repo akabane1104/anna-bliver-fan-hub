@@ -31,10 +31,10 @@ $cleanupErrors = [Collections.Generic.List[string]]::new()
 
 try {
     $metadataRows = @(
-        Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @(
-            'exec', '-T', 'mysql', 'sh', '-c',
-            'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql --batch --raw --skip-column-names --user=root --database="$MYSQL_DATABASE" --execute="SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = DATABASE();"'
-        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        Invoke-DockerCompose `
+            -EnvFile $resolvedEnvFile `
+            -Arguments (Get-DatabaseMetadataComposeArguments) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
     if ($metadataRows.Count -ne 1) {
         throw "Expected one database metadata row, found $($metadataRows.Count)."

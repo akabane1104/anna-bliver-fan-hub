@@ -3,6 +3,13 @@ Set-StrictMode -Version Latest
 $script:BackupFormatVersion = 2
 $script:DatabaseMetadataFormatVersion = 1
 
+function Get-DatabaseMetadataComposeArguments {
+    return @(
+        'exec', '-T', 'mysql', 'sh', '-c',
+        'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql --batch --raw --skip-column-names --user=root --database="$MYSQL_DATABASE" --execute=''SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = DATABASE();'''
+    )
+}
+
 function Assert-MySqlIdentifier {
     param(
         [Parameter(Mandatory = $true)][string]$Value,
