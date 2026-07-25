@@ -1,17 +1,17 @@
 # Phase 0.5 依赖安全检查
 
-检查日期：2026-07-23
+检查日期：2026-07-25
 
-起始提交：`2c0da7954da51153d394a063200cb18c9b2a343d`
+起始提交：`e63a723534aa65115aab081eb35bd182e38a220b`
 
 ## Audit 对照
 
 | 目标 | 修改前 | 修改后 |
 | --- | --- | --- |
-| backend 全部依赖 | 0 低危 / 2 中危 / 0 高危 / 0 严重 | 0 低危 / 2 中危 / 0 高危 / 0 严重 |
-| backend production | 0 低危 / 2 中危 / 0 高危 / 0 严重 | 0 低危 / 2 中危 / 0 高危 / 0 严重 |
-| frontend 全部依赖 | 10 低危 / 15 中危 / 23 高危 / 2 严重，共 50 | 10 低危 / 12 中危 / 23 高危 / 2 严重，共 47 |
-| frontend production | 0 | 0 |
+| backend 全部依赖 | 0 低危 / 2 中危 / 3 高危 / 0 严重 | 0 低危 / 0 中危 / 3 高危 / 0 严重 |
+| backend production | 0 低危 / 2 中危 / 0 高危 / 0 严重 | 0 |
+| frontend 全部依赖 | 10 低危 / 14 中危 / 23 高危 / 2 严重，共 49 | 10 低危 / 12 中危 / 23 高危 / 2 严重，共 47 |
+| frontend production | 0 低危 / 2 中危 / 0 高危 / 0 严重 | 0 |
 
 执行命令：
 
@@ -22,20 +22,20 @@ npm audit --prefix frontend
 npm audit --prefix frontend --omit=dev
 ```
 
-没有执行 `npm audit fix --force`，没有降级 `react-scripts`，也没有进行 CRA/Vite 迁移。
+没有执行 `npm audit fix` 或 `npm audit fix --force`，没有降级或升级 `react-scripts`，也没有进行 CRA/Vite 迁移。
 
 ## 已实施的最小修复
 
-上表以 Windows 宿主 Node.js 24/npm 11 执行四条指定命令的结果为准。Docker 的 Node.js 20/npm 10 构建树会安装一个额外的可选 peer，并报告 46 项完整工具链告警；两种环境的 frontend production audit 都是 0。
+上表以 Windows 宿主 Node.js 24/npm 11 执行四条指定命令的结果为准。Frontend Docker build stage 同样使用 Node.js 24。Backend 与 frontend 的 production audit 均为 0；剩余项目只位于现有开发、测试和构建工具链。
 
-前端已有 `postcss` override。修改前锁定版本为 `8.5.6`，处于 audit 公告的 `<8.5.10` 受影响范围。将 override 安全下限从 `^8.4.31` 提高到 `^8.5.10` 后，使用 Dockerfile 同款 Node.js 20/npm 10 重新解析锁文件：
+前端已有 `postcss` override。修改前锁定版本为 `8.5.6`，处于 audit 公告的 `<8.5.10` 受影响范围。将 override 安全下限从 `^8.4.31` 提高到 `^8.5.10` 后，使用 Dockerfile 同款 Node.js 24 重新解析锁文件：
 
 - `postcss 8.5.22`
 - `nanoid 3.3.16`，由新版 PostCSS 的合法依赖范围带入
 - `yaml 1.10.3`，将 CRA 工具链中受影响的 `1.10.2` 更新到同一 major 的安全补丁
 - `yaml 2.9.0`，满足 Tailwind/PostCSS 配置加载器的可选 peer
 
-安全修复没有跨 major，也没有增加直接运行时依赖。按宿主 npm 11 的 audit 口径，修复消除了 PostCSS 本身及其上传播到 `resolve-url-loader` 的两个中危计数，并消除了 `yaml 1.10.2` 的一个中危计数。
+`yaml 2.9.0` 作为 devDependency 固定 Tailwind/PostCSS 配置加载器的可选 peer；CRA 的旧消费者继续使用兼容的 `yaml 1.10.3`。这项构建树约束不会进入 production dependency tree。
 
 ## 前端正式镜像边界
 
@@ -45,7 +45,7 @@ npm audit --prefix frontend --omit=dev
 - 不存在 `node`、`npm`、`node_modules` 或 `react-scripts`
 - 构建阶段工具不会进入正式镜像
 
-因此 frontend 完整 audit 的剩余 47 项属于 CRA 5 开发、测试和构建工具链，不会随 Nginx 正式镜像发布。`npm audit --omit=dev` 保持 0。开发服务器仍不应暴露到不可信网络，处理外部贡献的源码、SVG、YAML 或构建配置时也应视为不可信输入。
+因此 frontend 完整 audit 的剩余 47 项属于 CRA 5 开发、测试和构建工具链，不会随 Nginx 正式镜像发布。`npm audit --omit=dev` 为 0。开发服务器仍不应暴露到不可信网络，处理外部贡献的源码、SVG、YAML 或构建配置时也应视为不可信输入。
 
 ## 腾讯云 SDK 与 uuid
 
@@ -54,18 +54,20 @@ npm audit --prefix frontend --omit=dev
 ```text
 backend
 └─ tencentcloud-sdk-nodejs 4.1.272
-   └─ uuid 9.0.1
+   └─ uuid 11.1.1（scoped override）
 ```
 
-检查时 npm registry 最新版 `tencentcloud-sdk-nodejs` 为 `4.1.273`，仍声明 `uuid ^9.0.1`；单纯升级该 patch 版本无法消除 `GHSA-w5hq-g745-h8pq`。安全版 uuid 要求 `>=11.1.1`，跨越了 SDK 当前依赖范围，因此没有添加强制 override，也没有为了降低 audit 数字而降级腾讯 SDK。
+`backend/package.json` 只在 `tencentcloud-sdk-nodejs` 子树内把 `uuid` 覆盖为 `11.1.1`，没有增加 direct uuid dependency，也没有使用全局 override。腾讯 SDK 仍锁定为 `4.1.272`。离线兼容性测试确认 CommonJS 加载、Captcha Client 构造和 `uuid.v4()` 正常，且 HTTP、HTTPS、DNS、socket 与 fetch 调用数均为 0。
 
-现有 SES 路径在配置完整时调用 `SesClient.SendEmail()`。腾讯 SDK 的公共请求客户端使用 `uuid.v4()` 生成 `X-TC-TraceId`，没有传入 `buf`；公告描述的触发条件是 v3/v5/v6 在调用方提供缓冲区时缺少边界检查。当前 SES 调用路径不会触发该条件，且 Phase 0 默认关闭 SES，因此实际可利用性较低。
+## React 19 与 React Router 8
 
-残余风险仍按上游中危记录：未来代码若直接使用受影响的 v3/v5/v6 缓冲区接口，或 SDK 改变内部调用方式，需要重新评估。应持续跟踪腾讯 SDK 何时把 uuid 依赖提升到安全 major，再通过正常 SDK 更新消除告警。
+Frontend 使用 React / React DOM `19.2.7`、React Router `8.3.0` 与 `qrcode.react 4.2.0`，并移除 `react-router-dom`。应用仍采用 Declarative Mode，没有引入 Framework Mode、SSR、RSC、loader 或 action。
+
+CRA 5 的 Jest 27 默认不能执行 React Router 8 的纯 ESM。`frontend/config/jest/reactRouterTransform.cjs` 复用 CRA 原 Babel transformer，只允许 `react-router` 与 `cookie-es` 经过测试转换，并只在 React Router 的精确 `routeModules.js` 路径中把唯一一个 Vite HMR `import.meta.hot` 改为 `undefined`。路径或出现次数变化会使测试失败。该 bridge 与 `setupTests.js` 都只用于测试，不进入 production bundle，也不 mock Router。
 
 ## 后续建议
 
 - 保持 frontend 正式镜像只发布静态构建产物，不在生产容器安装开发依赖。
 - 定期重新执行四组 audit，分别观察 production 与完整工具链。
-- 等待腾讯 SDK 官方升级 uuid，不使用未经上游验证的跨 major override。
+- 持续跟踪腾讯 SDK 正式支持 uuid 11+ 的版本，届时移除 scoped override。
 - 将 CRA 工具链替换作为独立迁移项目处理，不在依赖安全补丁中混入框架迁移。

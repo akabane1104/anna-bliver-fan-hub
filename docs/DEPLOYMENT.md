@@ -1,6 +1,6 @@
 # 部署与发布验收
 
-以下示例以 Ubuntu 22.04/24.04、Node.js 20、MySQL 8、Nginx 和 systemd 为基准。其他平台只要提供同等的 HTTPS、进程守护和持久化能力也可以部署。
+以下示例以 Ubuntu 22.04/24.04、Backend Node.js 20、Frontend build Node.js 22.22.0 或更新版本、MySQL 8、Nginx 和 systemd 为基准。Frontend Docker build stage 固定使用 Node.js 24。其他平台只要提供同等的 HTTPS、进程守护和持久化能力也可以部署。
 
 ## 目录建议
 

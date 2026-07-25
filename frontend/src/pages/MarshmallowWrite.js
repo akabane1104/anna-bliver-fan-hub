@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { marshmallowService, authService } from '../services';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import BackButton from '../components/BackButton';
 import AliyunCaptcha from '../components/AliyunCaptcha';
 import '../styles/App.css';

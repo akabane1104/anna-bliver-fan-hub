@@ -1,5 +1,5 @@
 import React from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink } from 'react-router';
 
 const ITEMS = Object.freeze([
   ['/admin/live-status', '直播状态'],

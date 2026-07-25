@@ -39,6 +39,7 @@ describe('usePollingResource', () => {
   afterEach(() => {
     act(() => root.unmount());
     container.remove();
+    jest.restoreAllMocks();
     jest.useRealTimers();
     if (originalVisibility) {
       Object.defineProperty(document, 'visibilityState', originalVisibility);
@@ -100,7 +101,7 @@ describe('usePollingResource', () => {
     expect(loader).toHaveBeenCalledTimes(2);
   });
 
-  test('unmount aborts the pending request and clears polling timers', async () => {
+  test('unmount aborts the pending request', async () => {
     let capturedSignal;
     const loader = jest.fn(({ signal }) => {
       capturedSignal = signal;
@@ -112,7 +113,30 @@ describe('usePollingResource', () => {
     });
     act(() => root.unmount());
     expect(capturedSignal.aborted).toBe(true);
-    expect(jest.getTimerCount()).toBe(0);
+    root = createRoot(container);
+  });
+
+  test('unmount clears the scheduled polling timer', async () => {
+    const setTimeoutSpy = jest.spyOn(window, 'setTimeout');
+    const clearTimeoutSpy = jest.spyOn(window, 'clearTimeout');
+    const loader = jest.fn().mockResolvedValue({ value: 'ready' });
+
+    await act(async () => {
+      root.render(<Harness loader={loader} />);
+      await flush();
+      await flush();
+    });
+
+    const pollingTimer = setTimeoutSpy.mock.calls
+      .map((call, index) => ({
+        delay: call[1],
+        id: setTimeoutSpy.mock.results[index].value
+      }))
+      .findLast(({ delay }) => delay === 5000);
+
+    expect(pollingTimer).toBeDefined();
+    act(() => root.unmount());
+    expect(clearTimeoutSpy).toHaveBeenCalledWith(pollingTimer.id);
     root = createRoot(container);
   });
 });

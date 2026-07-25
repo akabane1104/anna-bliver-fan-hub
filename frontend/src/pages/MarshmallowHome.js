@@ -1,5 +1,5 @@
 import React from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { authService } from '../services';
 import BackButton from '../components/BackButton';
 import '../styles/App.css';

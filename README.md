@@ -6,7 +6,7 @@
 
 `anna-bliver-fan-hub` 是一个面向 B站直播社区的开源全栈站点。它从原 `anna_site` 的公开业务中整理而来，保留网页歌单、匿名棉花糖、B站账号绑定、积分账本、积分商城和可配置主题，同时将 Bot、验证码与邮件都设计为可选集成。
 
-项目采用 React 18、Express、MySQL 8 和 JWT。公开版只处理积分币种，不包含盲盒、电影票、OBS、激活码、QQ/AI 配置或私有 Bot 管理页面。
+项目采用 React 19、Express、MySQL 8 和 JWT。公开版只处理积分币种，不包含盲盒、电影票、OBS、激活码、QQ/AI 配置或私有 Bot 管理页面。
 
 ![桌面端首页](docs/screenshots/home-desktop.png)
 
@@ -62,7 +62,8 @@ anna-bliver-fan-hub/
 
 ### 要求
 
-- Node.js 20 LTS 或更新版本
+- Backend 与 Listener：Node.js 20 LTS 或更新版本
+- Frontend 测试与构建：Node.js 22.22.0 或更新版本
 - npm 10 或更新版本
 - MySQL 8
 

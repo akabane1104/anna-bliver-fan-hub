@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router';
 import { prizeService } from '../services';
 import BackButton from '../components/BackButton';
 import { useFeedback } from '../components/FeedbackProvider';

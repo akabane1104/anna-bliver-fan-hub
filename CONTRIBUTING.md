@@ -10,7 +10,7 @@
 
 1. 阅读 [README](README.md)、[架构](docs/ARCHITECTURE.md) 和 [安全策略](SECURITY.md)。
 2. 从 `.env.example` 创建本地配置，不提交真实 `.env`。
-3. 使用 Node.js 20 LTS 与 MySQL 8。
+3. Backend 与 Listener 使用 Node.js 20 LTS 或更新版本；Frontend 测试与构建使用 Node.js 22.22.0 或更新版本；数据库使用 MySQL 8。
 4. 执行 `npm run install:all`，然后分别启动前后端。
 
 ## 代码原则
