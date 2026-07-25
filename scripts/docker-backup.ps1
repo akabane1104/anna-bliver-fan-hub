@@ -5,6 +5,7 @@
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'docker-common.ps1')
+. (Join-Path $PSScriptRoot 'backup-contract.ps1')
 
 $resolvedEnvFile = Resolve-ComposeEnvFile -EnvFile $EnvFile
 Assert-ComposeEnv -EnvFile $resolvedEnvFile | Out-Null
@@ -24,10 +25,30 @@ $temporarySql = "anna-$stamp.sql"
 $temporaryUploads = "anna-uploads-$stamp.tar.gz"
 $databaseFile = Join-Path $backupDirectory 'mysql.sql'
 $uploadsFile = Join-Path $backupDirectory 'uploads.tar.gz'
+$metadataFile = Join-Path $backupDirectory 'database-metadata.json'
 $operationError = $null
 $cleanupErrors = [Collections.Generic.List[string]]::new()
 
 try {
+    $metadataRows = @(
+        Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @(
+            'exec', '-T', 'mysql', 'sh', '-c',
+            'export MYSQL_PWD="$MYSQL_ROOT_PASSWORD"; mysql --batch --raw --skip-column-names --user=root --database="$MYSQL_DATABASE" --execute="SELECT SCHEMA_NAME, DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = DATABASE();"'
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    if ($metadataRows.Count -ne 1) {
+        throw "Expected one database metadata row, found $($metadataRows.Count)."
+    }
+    $metadataFields = @($metadataRows[0] -split "`t")
+    if ($metadataFields.Count -ne 3) {
+        throw "Expected three database metadata fields, found $($metadataFields.Count)."
+    }
+    $databaseMetadata = New-DatabaseMetadata `
+        -SourceDatabase $metadataFields[0] `
+        -DefaultCharacterSet $metadataFields[1] `
+        -DefaultCollation $metadataFields[2]
+    Write-BackupJson -Path $metadataFile -Value $databaseMetadata
+
     Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @(
         'exec', '-T', 'mysql', 'sh', '-c',
         "umask 077; export MYSQL_PWD=`"`$MYSQL_ROOT_PASSWORD`"; mysqldump --user=root --single-transaction --quick --default-character-set=utf8mb4 --routines --triggers --events `"`$MYSQL_DATABASE`" > /tmp/$temporarySql"
@@ -41,16 +62,23 @@ try {
     Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @('cp', "backend:/tmp/$temporaryUploads", $uploadsFile)
 
     $manifest = [ordered]@{
+        backupFormatVersion = $script:BackupFormatVersion
         createdAt = (Get-Date).ToString('o')
-        database = 'anna_bliver_fan_hub'
+        database = $databaseMetadata.sourceDatabase
         databaseFile = 'mysql.sql'
+        databaseSize = (Get-Item -LiteralPath $databaseFile).Length
         databaseSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $databaseFile).Hash
         uploadsFile = 'uploads.tar.gz'
+        uploadsSize = (Get-Item -LiteralPath $uploadsFile).Length
         uploadsSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $uploadsFile).Hash
+        databaseMetadataFile = 'database-metadata.json'
+        databaseMetadataSize = (Get-Item -LiteralPath $metadataFile).Length
+        databaseMetadataSha256 = (Get-FileHash -Algorithm SHA256 -LiteralPath $metadataFile).Hash
+        databaseDefaultCharacterSet = $databaseMetadata.defaultCharacterSet
+        databaseDefaultCollation = $databaseMetadata.defaultCollation
     }
-    $manifestJson = $manifest | ConvertTo-Json
-    $utf8WithoutBom = [Text.UTF8Encoding]::new($false)
-    [IO.File]::WriteAllText((Join-Path $backupDirectory 'manifest.json'), $manifestJson, $utf8WithoutBom)
+    Write-BackupJson -Path (Join-Path $backupDirectory 'manifest.json') -Value $manifest
+    Resolve-BackupContract -BackupDirectory $backupDirectory | Out-Null
 }
 catch {
     $operationError = $_

@@ -1,40 +1,45 @@
 ﻿param(
     [Parameter(Mandatory = $true)][string]$BackupDirectory,
     [string]$EnvFile = '.env',
+    [string]$TargetDatabase = '',
     [switch]$Force,
-    [switch]$SkipSafetyBackup
+    [switch]$SkipSafetyBackup,
+    [switch]$AllowLegacyBackupWithoutDatabaseMetadata,
+    [string]$LegacyDefaultCharacterSet = '',
+    [string]$LegacyDefaultCollation = ''
 )
 
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'docker-common.ps1')
+. (Join-Path $PSScriptRoot 'backup-contract.ps1')
 
 $resolvedEnvFile = Resolve-ComposeEnvFile -EnvFile $EnvFile
-Assert-ComposeEnv -EnvFile $resolvedEnvFile | Out-Null
+$composeEnvValues = Assert-ComposeEnv -EnvFile $resolvedEnvFile
 Assert-DockerAvailable
 
 if (-not [IO.Path]::IsPathRooted($BackupDirectory)) {
     $BackupDirectory = Join-Path $script:RepositoryRoot $BackupDirectory
 }
 $BackupDirectory = [IO.Path]::GetFullPath($BackupDirectory)
-$databaseFile = Join-Path $BackupDirectory 'mysql.sql'
-$uploadsFile = Join-Path $BackupDirectory 'uploads.tar.gz'
-$manifestFile = Join-Path $BackupDirectory 'manifest.json'
-
-foreach ($requiredFile in @($databaseFile, $uploadsFile)) {
-    if (-not (Test-Path -LiteralPath $requiredFile -PathType Leaf)) {
-        throw "备份不完整，缺少：$requiredFile"
-    }
+$resolvedTargetDatabase = if ([string]::IsNullOrWhiteSpace($TargetDatabase)) {
+    Get-DotEnvValue `
+        -Values $composeEnvValues `
+        -Name 'MYSQL_DATABASE' `
+        -Default 'anna_bliver_fan_hub'
 }
-
-if (Test-Path -LiteralPath $manifestFile -PathType Leaf) {
-    $manifest = Get-Content -Raw -LiteralPath $manifestFile -Encoding UTF8 | ConvertFrom-Json
-    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $databaseFile).Hash -ne $manifest.databaseSha256) {
-        throw 'mysql.sql 的 SHA-256 与 manifest.json 不一致。'
-    }
-    if ((Get-FileHash -Algorithm SHA256 -LiteralPath $uploadsFile).Hash -ne $manifest.uploadsSha256) {
-        throw 'uploads.tar.gz 的 SHA-256 与 manifest.json 不一致。'
-    }
+else {
+    $TargetDatabase
 }
+$targetDatabaseName = Assert-MySqlIdentifier `
+    -Value $resolvedTargetDatabase `
+    -FieldName 'TargetDatabase'
+$backupContract = Resolve-BackupContract `
+    -BackupDirectory $BackupDirectory `
+    -AllowLegacyBackupWithoutDatabaseMetadata:$AllowLegacyBackupWithoutDatabaseMetadata `
+    -LegacyDefaultCharacterSet $LegacyDefaultCharacterSet `
+    -LegacyDefaultCollation $LegacyDefaultCollation
+$databaseFile = $backupContract.DatabaseFile
+$uploadsFile = $backupContract.UploadsFile
 
 if (-not $Force) {
     $confirmation = Read-Host "还原会覆盖当前数据库和 uploads。输入 RESTORE 继续"
@@ -51,16 +56,40 @@ if (-not $SkipSafetyBackup) {
     }
 }
 
-$temporarySql = 'anna-restore.sql'
+$temporarySql = "anna-restore-$([Guid]::NewGuid().ToString('N')).sql"
 Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @('up', '--detach', '--wait', '--wait-timeout', '180', 'mysql')
 Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @('stop', 'frontend', 'backend')
 
 try {
+    $databaseDefaultsSql = "CREATE DATABASE IF NOT EXISTS ``$targetDatabaseName`` CHARACTER SET $($backupContract.DefaultCharacterSet) COLLATE $($backupContract.DefaultCollation); ALTER DATABASE ``$targetDatabaseName`` CHARACTER SET $($backupContract.DefaultCharacterSet) COLLATE $($backupContract.DefaultCollation);"
+    Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @(
+        'exec', '-T', 'mysql', 'sh', '-c',
+        "export MYSQL_PWD=`"`$MYSQL_ROOT_PASSWORD`"; mysql --user=root --execute='$databaseDefaultsSql'"
+    )
+
     Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @('cp', $databaseFile, "mysql:/tmp/$temporarySql")
     Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @(
         'exec', '-T', 'mysql', 'sh', '-c',
-        "mysql --user=root --password=`"`$MYSQL_ROOT_PASSWORD`" `"`$MYSQL_DATABASE`" < /tmp/$temporarySql"
+        "export MYSQL_PWD=`"`$MYSQL_ROOT_PASSWORD`"; mysql --user=root --database='$targetDatabaseName' < /tmp/$temporarySql"
     )
+
+    $restoredDefaults = @(
+        Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @(
+            'exec', '-T', 'mysql', 'sh', '-c',
+            "export MYSQL_PWD=`"`$MYSQL_ROOT_PASSWORD`"; mysql --batch --raw --skip-column-names --user=root --database='$targetDatabaseName' --execute=`"SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = DATABASE();`""
+        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+    )
+    if ($restoredDefaults.Count -ne 1) {
+        throw "Expected one restored database metadata row, found $($restoredDefaults.Count)."
+    }
+    $restoredFields = @($restoredDefaults[0] -split "`t")
+    if (
+        $restoredFields.Count -ne 2 -or
+        $restoredFields[0] -cne $backupContract.DefaultCharacterSet -or
+        $restoredFields[1] -cne $backupContract.DefaultCollation
+    ) {
+        throw 'Restored database default character set or collation does not match the backup.'
+    }
 
     Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @(
         'run', '--rm', '--no-deps', '--volume', "${BackupDirectory}:/restore:ro", 'backend', 'sh', '-c',

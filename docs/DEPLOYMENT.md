@@ -170,6 +170,10 @@ server {
 - `backend/uploads/prizes/`。
 
 推荐每日数据库备份、上传目录增量备份和定期恢复演练。备份不得进入公开仓库。
+标准备份格式同时保存 database default character set／collation，并在 manifest 中记录
+`mysql.sql`、uploads archive 与 `database-metadata.json` 的大小及 SHA-256。发布前必须使用标准
+restore 流程完成隔离恢复，确认目标数据库 default metadata 精确恢复；缺少 metadata 的旧格式备份
+只能经显式 legacy override 使用，不得当作完整恢复点。
 
 ## 更新流程
 

@@ -116,7 +116,8 @@ docker compose --env-file .env run --rm --no-deps backend npm run db:migrate:pos
 ## 正确部署顺序
 
 1. 保持 B站 Listener、`LIVE_EVENT_INGEST_ENABLED` 与相关自动化关闭。
-2. 使用现有备份脚本备份 MySQL 与 uploads，并验证备份可读。
+2. 使用现有备份脚本备份 MySQL 与 uploads，验证 manifest、文件 checksum 及 database default
+   metadata，并在隔离目标执行标准 restore 流程确认 metadata 与资料均可恢复。
 3. 在待部署版本上完成测试和构建，但不要先启动新 Backend。
 4. 设置受控的 `DB_*` 环境，执行 `status` 与 `preflight`。
 5. 执行 `apply`，随后必须执行 `postcheck`。

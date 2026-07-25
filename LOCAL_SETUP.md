@@ -86,7 +86,8 @@ Node.js 与 npm 只用于宿主机测试；容器构建固定使用现有 `packa
 
 - `mysql.sql`：`anna_bliver_fan_hub` 数据库逻辑备份
 - `uploads.tar.gz`：`backend/uploads` 持久化内容
-- `manifest.json`：时间与两个文件的 SHA-256
+- `database-metadata.json`：来源数据库及其 default character set／collation
+- `manifest.json`：备份格式版本、文件大小、SHA-256 与 database metadata 交叉核对值
 
 `backups/` 已被 Git 忽略。备份可能包含用户资料、订单、地址与上传文件，应加密保存并限制访问。
 
@@ -99,6 +100,10 @@ Node.js 与 npm 只用于宿主机测试；容器构建固定使用现有 `packa
 ```
 
 自动化场景可加 `-Force` 跳过交互确认。只有在当前环境无法备份且已确认风险时，才使用 `-SkipSafetyBackup`。
+新版还原会先验证全部文件的大小与 SHA-256，再于导入前恢复目标数据库的 default character set／collation，
+并在导入后查询 `information_schema.SCHEMATA` 复核。旧格式备份不含这些 metadata，默认会 fail closed；
+只有明确提供 `-AllowLegacyBackupWithoutDatabaseMetadata`、`-LegacyDefaultCharacterSet` 与
+`-LegacyDefaultCollation` 时才会走 legacy 还原路径。
 
 ## 数据持久化
 
