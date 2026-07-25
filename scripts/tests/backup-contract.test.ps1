@@ -207,14 +207,14 @@ try {
             -Condition $backupSource.Contains('Get-DatabaseMetadataComposeArguments') `
             -Label 'backup metadata argument helper'
         Assert-True `
+            -Condition $restoreSource.Contains('Get-RestoredDatabaseMetadataComposeArguments') `
+            -Label 'restore metadata argument helper'
+        Assert-True `
             -Condition $backupSource.Contains('database-metadata.json') `
             -Label 'backup metadata file'
         Assert-True `
             -Condition $restoreSource.Contains('ALTER DATABASE') `
             -Label 'restore database defaults'
-        Assert-True `
-            -Condition $restoreSource.Contains('information_schema.SCHEMATA') `
-            -Label 'restore metadata verification'
         Assert-True `
             -Condition (-not $restoreSource.Contains('--password=')) `
             -Label 'restore command line password exclusion'
@@ -243,6 +243,23 @@ try {
             Assert-Equal -Actual $fields[0] -Expected $expectedDatabase -Label 'Compose source database'
             Assert-Equal -Actual $fields[1] -Expected 'utf8mb4' -Label 'Compose character set'
             Assert-Equal -Actual $fields[2] -Expected 'utf8mb4_unicode_ci' -Label 'Compose collation'
+        }
+
+        Invoke-Test 'real Compose restored metadata query preserves the complete SQL argument' {
+            $rows = @(
+                Invoke-DockerCompose `
+                    -EnvFile $resolvedComposeEnvFile `
+                    -Arguments (
+                        Get-RestoredDatabaseMetadataComposeArguments `
+                            -TargetDatabase $expectedDatabase
+                    ) |
+                    Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+            )
+            Assert-Equal -Actual $rows.Count -Expected 1 -Label 'restored Compose metadata row count'
+            $fields = @($rows[0] -split "`t")
+            Assert-Equal -Actual $fields.Count -Expected 2 -Label 'restored Compose metadata field count'
+            Assert-Equal -Actual $fields[0] -Expected 'utf8mb4' -Label 'restored Compose character set'
+            Assert-Equal -Actual $fields[1] -Expected 'utf8mb4_unicode_ci' -Label 'restored Compose collation'
         }
     }
 

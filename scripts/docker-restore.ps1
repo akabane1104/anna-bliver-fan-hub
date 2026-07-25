@@ -74,10 +74,10 @@ try {
     )
 
     $restoredDefaults = @(
-        Invoke-DockerCompose -EnvFile $resolvedEnvFile -Arguments @(
-            'exec', '-T', 'mysql', 'sh', '-c',
-            "export MYSQL_PWD=`"`$MYSQL_ROOT_PASSWORD`"; mysql --batch --raw --skip-column-names --user=root --database='$targetDatabaseName' --execute=`"SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = DATABASE();`""
-        ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+        Invoke-DockerCompose `
+            -EnvFile $resolvedEnvFile `
+            -Arguments (Get-RestoredDatabaseMetadataComposeArguments -TargetDatabase $targetDatabaseName) |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
     )
     if ($restoredDefaults.Count -ne 1) {
         throw "Expected one restored database metadata row, found $($restoredDefaults.Count)."

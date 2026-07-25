@@ -22,6 +22,22 @@ function Assert-MySqlIdentifier {
     return $Value
 }
 
+function Get-RestoredDatabaseMetadataComposeArguments {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$TargetDatabase
+    )
+
+    $validatedTarget = Assert-MySqlIdentifier `
+        -Value $TargetDatabase `
+        -FieldName 'targetDatabase'
+
+    return @(
+        'exec', '-T', 'mysql', 'sh', '-c',
+        "export MYSQL_PWD=`"`$MYSQL_ROOT_PASSWORD`"; mysql --batch --raw --skip-column-names --user=root --database='$validatedTarget' --execute='SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = DATABASE();'"
+    )
+}
+
 function Write-BackupJson {
     param(
         [Parameter(Mandatory = $true)][string]$Path,
