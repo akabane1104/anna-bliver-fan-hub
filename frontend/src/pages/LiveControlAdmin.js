@@ -496,7 +496,7 @@ function LiveControlAdmin() {
                 />
               </label>
               <label>
-                开始时间（台北）
+                开始时间（北京时间）
                 <input
                   type="datetime-local"
                   value={activity.starts_at}
@@ -504,7 +504,7 @@ function LiveControlAdmin() {
                 />
               </label>
               <label>
-                结束时间（台北）
+                结束时间（北京时间）
                 <input
                   type="datetime-local"
                   value={activity.ends_at}
