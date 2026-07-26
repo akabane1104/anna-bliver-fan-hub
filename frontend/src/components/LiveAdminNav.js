@@ -5,7 +5,8 @@ const ITEMS = Object.freeze([
   ['/admin/live-control', '直播中控'],
   ['/admin/live-status', '直播状态'],
   ['/admin/live-events', '事件记录'],
-  ['/admin/song-requests', '点歌控制']
+  ['/admin/song-requests', '点歌控制'],
+  ['/admin/obs-overlays', 'OBS 画面']
 ]);
 
 function LiveAdminNav() {

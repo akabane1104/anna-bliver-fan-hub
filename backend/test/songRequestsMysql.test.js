@@ -105,7 +105,7 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
     host,
     port,
     user: 'root',
-    password: '',
+    password: process.env.PHASE4C_TEST_DB_PASSWORD || '',
     database: 'anna_bliver_fan_hub',
     connectionLimit: 12,
     supportBigNumbers: true,
@@ -119,7 +119,7 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
        WHERE table_schema = DATABASE()
        ORDER BY table_name`
     );
-    assert.equal(tableRows.length, 29);
+    assert.equal(tableRows.length, 30);
     const tableNames = new Set(tableRows.map((row) => row.TABLE_NAME || row.table_name));
     for (const name of [
       'live_events',
@@ -128,7 +128,8 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
       'song_request_history',
       'song_aliases',
       'song_request_policies',
-      'song_request_details'
+      'song_request_details',
+      'obs_overlay_events'
     ]) {
       assert.equal(tableNames.has(name), true, name);
     }

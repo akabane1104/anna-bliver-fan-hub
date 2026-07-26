@@ -42,6 +42,10 @@ test('migration catalog discovers strict filenames in stable version order', () 
       {
         version: '202607240003',
         name: 'phase_4i_song_request_experience'
+      },
+      {
+        version: '202607240004',
+        name: 'phase_4j_obs_overlays'
       }
     ]
   );
@@ -82,6 +86,8 @@ test('migration catalog discovers strict filenames in stable version order', () 
       'song_aliases.unique_song_alias_script'
     ]
   );
+  assert.deepEqual(migrations[3].depends_on, ['202607240003']);
+  assert.deepEqual(migrations[3].tables, ['obs_overlay_events']);
 });
 
 test('migration discovery rejects invalid SQL filenames and missing contracts', (t) => {
@@ -184,18 +190,20 @@ test('Phase 4I migration permits a legacy preflight before song_aliases exists',
   assert.match(queries[0], /information_schema\.TABLES/);
 });
 
-test('contracts cover 22 legacy and seven additive target tables', () => {
+test('contracts cover 22 legacy and eight additive target tables', () => {
   assert.equal(legacyTables.length, 22);
   assert.equal(new Set(legacyTables).size, 22);
   assert.deepEqual(Object.keys(targetContracts), [
     ...MIGRATION.tables,
     'song_request_policies',
-    'song_request_details'
+    'song_request_details',
+    'obs_overlay_events'
   ]);
   assert.deepEqual(Object.keys(migrationContracts), [
     '202607240001',
     '202607240002',
-    '202607240003'
+    '202607240003',
+    '202607240004'
   ]);
   assert.equal(ledgerContract.indexes.some(({ name }) => name === 'PRIMARY'), true);
 });

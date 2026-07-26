@@ -3,6 +3,12 @@ const crypto = require('crypto');
 const { verifyCaptcha } = require('../utils/aliyunCaptcha');
 const { sendMarshmallowNotificationEmail } = require('../utils/emailService');
 const { idList, positiveInt, stringValue } = require('../utils/validation');
+const {
+  publishMarshmallowSchema
+} = require('../schemas/obsOverlaySchemas');
+const {
+  defaultObsOverlayEventService
+} = require('../services/obsOverlayEventService');
 
 // Create a new marshmallow
 exports.createMarshmallow = async (req, res) => {
@@ -173,5 +179,49 @@ exports.replyMarshmallow = async (req, res) => {
   } catch (error) {
     console.error('Error replying to marshmallow:', error);
     res.status(error.status || 500).json({ message: error.status ? error.message : 'Server error' });
+  }
+};
+
+exports.publishMarshmallowToObs = async (req, res) => {
+  try {
+    const id = positiveInt(req.params.id, { field: 'Marshmallow ID' });
+    const validation = publishMarshmallowSchema.safeParse(req.body);
+    if (!validation.success) {
+      return res.status(400).json({ message: 'OBS display settings are invalid' });
+    }
+    const [rows] = await db.query(
+      `SELECT sender_alias, content, reply_content, created_at
+       FROM marshmallows
+       WHERE id = ?
+       LIMIT 1`,
+      [id]
+    );
+    if (!rows.length) {
+      return res.status(404).json({ message: 'Marshmallow not found' });
+    }
+    const marshmallow = rows[0];
+    const result = await defaultObsOverlayEventService.create({
+      eventType: 'cotton_candy',
+      source: 'manual',
+      displayDurationMs: validation.data.displayDurationMs,
+      idempotencyKey: validation.data.idempotencyKey,
+      payload: {
+        displayName: marshmallow.sender_alias || '匿名观众',
+        content: marshmallow.content,
+        reply: marshmallow.reply_content || null,
+        createdAt: new Date(marshmallow.created_at).toISOString()
+      }
+    }, req.userId);
+    return res.status(result.duplicate ? 200 : 201).json({
+      status: result.duplicate ? 'duplicate' : 'created',
+      event: result.event
+    });
+  } catch (error) {
+    const status = Number(error?.status);
+    return res.status(status >= 400 && status < 500 ? status : 500).json({
+      message: status >= 400 && status < 500
+        ? error.message
+        : 'OBS event could not be created'
+    });
   }
 };

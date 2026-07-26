@@ -110,6 +110,22 @@ const MarshmallowAdmin = () => {
     }
   };
 
+  const handlePublishToObs = async (event, id) => {
+    event.stopPropagation();
+    try {
+      const randomPart = window.crypto?.randomUUID
+        ? window.crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      await marshmallowService.publishToObs(id, {
+        displayDurationMs: 12000,
+        idempotencyKey: `cotton-candy-${randomPart}`
+      });
+      toast('棉花糖已发送到 OBS', { type: 'success' });
+    } catch (error) {
+      toast(error.response?.data?.message || '发送到 OBS 失败', { type: 'error' });
+    }
+  };
+
   const handleConfirmAction = async () => {
     if (selectedIds.size === 0) return;
 
@@ -301,6 +317,12 @@ const MarshmallowAdmin = () => {
                           )}
                           <button className="btn btn-secondary" onClick={(e) => handleReplyClick(e, m)}>
                             {m.reply_content ? '修改回复' : '回复'}
+                          </button>
+                          <button
+                            className="btn btn-outline"
+                            onClick={(event) => handlePublishToObs(event, m.id)}
+                          >
+                            展示到 OBS
                           </button>
                         </div>
                       )}

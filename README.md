@@ -6,7 +6,7 @@
 
 `anna-bliver-fan-hub` 是一个面向 B站直播社区的开源全栈站点。它从原 `anna_site` 的公开业务中整理而来，保留网页歌单、匿名棉花糖、B站账号绑定、积分账本、积分商城和可配置主题，同时将 Bot、验证码与邮件都设计为可选集成。
 
-项目采用 React 19、Express、MySQL 8 和 JWT。公开版只处理积分币种，不包含盲盒、电影票、OBS、激活码、QQ/AI 配置或私有 Bot 管理页面。
+项目采用 React 19、Express、MySQL 8 和 JWT。公开版只处理积分币种，并提供不依赖 OBS WebSocket 的 Browser Source 画面元件；不包含盲盒、电影票、激活码、QQ/AI 配置或私有 Bot 管理页面。
 
 ![桌面端首页](docs/screenshots/home-desktop.png)
 
@@ -27,6 +27,7 @@
 - 权限管理：歌曲、棉花糖、积分、商城和站点配置可分别授权。
 - 站点配置：标题、文案、Logo、favicon、首页 UID、备案和多套主题色卡。
 - 直播首页与中控：统一点歌队列、自动／手动直播状态、今日活动和安全的礼物／上舰摘要。
+- OBS Browser Source：正在演唱、队列、活动进度与受控手动提示，使用匿名 snapshot 与 SSE。
 - 可选集成：阿里云 Captcha、腾讯云 SES 和 bili-bot WebSocket。
 
 ## 项目结构
@@ -90,7 +91,7 @@ Linux、macOS、Git Bash：
 mysql -u root -p < backend/src/config/schema.sql
 ```
 
-SQL 会为全新空数据库创建 `anna_bliver_fan_hub` 和 29 张业务表；执行 migration 后另有 1 张 `schema_migrations` 帐本表，合计 30 张。SQL 不会替你创建 MySQL 登录用户。既有数据库不得重跑完整 `schema.sql`，必须先备份，再依次执行 migration 的 `preflight`、`apply` 与 `postcheck`。最简单的本地方式是将后端 `.env` 的 `DB_USER` 改为已有的 MySQL 用户；独立数据库用户、Docker migration 与完整升级流程见 [部署文档](docs/DEPLOYMENT.md#数据库账号)。
+SQL 会为全新空数据库创建 `anna_bliver_fan_hub` 和 30 张业务表；执行 migration 后另有 1 张 `schema_migrations` 帐本表，合计 31 张。SQL 不会替你创建 MySQL 登录用户。既有数据库不得重跑完整 `schema.sql`，必须先备份，再依次执行 migration 的 `preflight`、`apply` 与 `postcheck`。最简单的本地方式是将后端 `.env` 的 `DB_USER` 改为已有的 MySQL 用户；独立数据库用户、Docker migration 与完整升级流程见 [部署文档](docs/DEPLOYMENT.md#数据库账号)。
 
 ### 3. 创建本地配置
 

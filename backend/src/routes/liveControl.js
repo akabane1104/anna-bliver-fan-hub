@@ -2,10 +2,12 @@ const express = require('express');
 const authMiddleware = require('../middleware/auth');
 const { requirePermission, PERMISSIONS } = require('../middleware/permissions');
 const { createLiveControlController } = require('../controllers/liveControlController');
+const { createObsOverlayController } = require('../controllers/obsOverlayController');
 const asyncHandler = require('../utils/asyncHandler');
 
 function createLiveControlRouter({
   controller = createLiveControlController(),
+  obsOverlayController = createObsOverlayController(),
   authenticate = authMiddleware,
   authorize = requirePermission(PERMISSIONS.LIVE_CONTROL_MANAGE),
   authorizeCatalog = requirePermission(PERMISSIONS.PLAYLIST_MANAGE)
@@ -34,6 +36,12 @@ function createLiveControlRouter({
   controlRouter.post('/home/requests/:publicId/advance', asyncHandler(controller.advanceCurrent));
   controlRouter.get('/status', asyncHandler(controller.liveStatus));
   controlRouter.get('/events', asyncHandler(controller.liveEvents));
+  controlRouter.get('/obs-overlay/events', asyncHandler(obsOverlayController.listEvents));
+  controlRouter.post('/obs-overlay/events', asyncHandler(obsOverlayController.createEvent));
+  controlRouter.delete(
+    '/obs-overlay/events/:publicId',
+    asyncHandler(obsOverlayController.dismissEvent)
+  );
   controlRouter.post('/sessions', asyncHandler(controller.createSession));
   controlRouter.get('/sessions/active', asyncHandler(controller.activeSessions));
   controlRouter.get('/sessions/recoverable', asyncHandler(controller.recoverableSessions));

@@ -3,6 +3,9 @@ const { validateLiveEvent } = require('../schemas/liveEventSchema');
 const { listenerStatusReportSchema } = require('../schemas/liveHomeSchemas');
 const { isLiveEventTargetAllowed } = require('../utils/liveEventConfig');
 const { defaultLiveHomeService } = require('../services/liveHomeService');
+const {
+  defaultObsOverlayRealtime
+} = require('../services/obsOverlayRealtime');
 
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -41,6 +44,7 @@ function safeObservation(value) {
 function createLiveEventController({
   service,
   statusService = defaultLiveHomeService,
+  realtime = defaultObsOverlayRealtime,
   logger = console,
   clock = () => process.hrtime.bigint()
 }) {
@@ -75,6 +79,7 @@ function createLiveEventController({
         const result = await service.record(event);
         status = result.status;
         if (result.status === 'accepted') {
+          realtime.publish('live_event_accepted');
           const observation = safeObservation(result.observation);
           return res.status(201).json({
             status: 'accepted',

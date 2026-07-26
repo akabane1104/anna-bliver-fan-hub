@@ -353,6 +353,11 @@ export const marshmallowService = {
   async deleteMarshmallows(ids) {
     const response = await api.post('/marshmallows/delete', { ids });
     return response.data;
+  },
+
+  async publishToObs(id, options) {
+    const response = await api.post(`/marshmallows/${id}/obs`, options);
+    return response.data;
   }
 };
 
@@ -376,3 +381,4 @@ export { default as pointsService } from './pointsService';
 export { default as songRequestService } from './songRequestService';
 export { default as liveAdminService } from './liveAdminService';
 export { default as liveHomeService } from './liveHomeService';
+export { default as obsOverlayService } from './obsOverlayService';

@@ -15,6 +15,7 @@ router.post('/bind', authMiddleware, asyncHandler(marshmallowController.bindMars
 
 // Admin/Marshmallow manager routes - requires marshmallow.manage permission
 router.get('/admin', authMiddleware, requirePermission(PERMISSIONS.MARSHMALLOW_MANAGE), asyncHandler(marshmallowController.getAllMarshmallows));
+router.post('/:id/obs', authMiddleware, requirePermission(PERMISSIONS.MARSHMALLOW_MANAGE), asyncHandler(marshmallowController.publishMarshmallowToObs));
 router.put('/:id/reply', authMiddleware, requirePermission(PERMISSIONS.MARSHMALLOW_MANAGE), asyncHandler(marshmallowController.replyMarshmallow));
 router.post('/:id/read', authMiddleware, requirePermission(PERMISSIONS.MARSHMALLOW_MANAGE), asyncHandler(marshmallowController.markAsRead));
 router.post('/delete', authMiddleware, requirePermission(PERMISSIONS.MARSHMALLOW_MANAGE), asyncHandler(marshmallowController.deleteMarshmallows));

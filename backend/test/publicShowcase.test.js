@@ -193,13 +193,16 @@ test('profile cards and status colors follow the active site theme', () => {
 test('footer keeps an opaque protected slot without a plaintext fallback', () => {
   const source = read('frontend', 'src', 'components', 'Footer.js');
   const entry = read('frontend', 'src', 'index.js');
+  const policy = read('frontend', 'src', 'utils', 'obsRoutePolicy.js');
   assert.match(source, /<x-r7-slot/);
   assert.match(source, /data-ui-slot="r7-4f1c"/);
   assert.match(source, /data-bilibili-uid=\{siteSettings\.bilibiliUid \|\| ''\}/);
   assert.doesNotMatch(source, /© 2026|Linus_Lieu|github\.com\/LinusLieu|annapiggy-logo\.png/);
   assert.doesNotMatch(source, /site-footer-fallback/);
   assert.match(entry, /requestIdleCallback/);
-  assert.match(entry, /script\.dataset\.uiContinuity = 'r8'/);
+  assert.match(entry, /appendRuntimeAsset\(runtimeAssets\.continuity, 'r8', true\)/);
+  assert.match(entry, /if \(isObsOutputPath\(window\.location\.pathname\)\) return/);
+  assert.match(policy, /pathname === '\/obs' \|\| pathname\.startsWith\('\/obs\/'\)/);
   assert.doesNotMatch(entry, /© 2026|Linus_Lieu|github\.com\/LinusLieu|annapiggy-logo\.png/);
 });
 

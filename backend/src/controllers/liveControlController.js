@@ -34,6 +34,9 @@ const {
   parseOrThrow,
   sendSongRequestError
 } = require('./songRequestController');
+const {
+  defaultObsOverlayRealtime
+} = require('../services/obsOverlayRealtime');
 
 const defaultLiveSessionService = createLiveSessionService();
 
@@ -45,15 +48,24 @@ function createLiveControlController({
   sessionService = defaultLiveSessionService,
   requestService = defaultSongRequestService,
   liveAdminService = defaultLiveAdminService,
-  liveHomeService = defaultLiveHomeService
+  liveHomeService = defaultLiveHomeService,
+  realtime = defaultObsOverlayRealtime
 } = {}) {
+  const notify = (reason) => realtime.publish(reason);
+
   const transitionSession = (toStatus) => async (req, res) => {
     try {
       const publicId = requestId(req);
       const input = parseOrThrow(sessionTransitionSchema, req.body);
+      const session = await sessionService.transition(
+        publicId,
+        toStatus,
+        input.expected_version
+      );
+      notify('live_session_changed');
       return res.json({
         status: 'accepted',
-        session: await sessionService.transition(publicId, toStatus, input.expected_version)
+        session
       });
     } catch (error) {
       return sendSongRequestError(res, error);
@@ -70,6 +82,7 @@ function createLiveControlController({
         input,
         req.userId
       );
+      notify('song_request_changed');
       return res.json({
         status: 'accepted',
         request: await requestService.getRequest(request.public_id)
@@ -100,7 +113,9 @@ function createLiveControlController({
     async setSongRequestsOpen(req, res) {
       try {
         const input = parseOrThrow(songRequestOpenSchema, req.body);
-        return res.json(await liveHomeService.setSongRequestsOpen(input.open, req.userId));
+        const result = await liveHomeService.setSongRequestsOpen(input.open, req.userId);
+        notify('song_request_settings_changed');
+        return res.json(result);
       } catch (error) {
         return sendSongRequestError(res, error);
       }
@@ -109,7 +124,9 @@ function createLiveControlController({
     async setLiveHomeActivity(req, res) {
       try {
         const input = parseOrThrow(liveHomeActivitySchema, req.body);
-        return res.json(await liveHomeService.setActivity(input, req.userId));
+        const result = await liveHomeService.setActivity(input, req.userId);
+        notify('activity_changed');
+        return res.json(result);
       } catch (error) {
         return sendSongRequestError(res, error);
       }
@@ -123,6 +140,7 @@ function createLiveControlController({
           input,
           req.userId
         );
+        notify('song_request_advanced');
         return res.json({
           status: 'accepted',
           previous: await requestService.getRequest(result.previous.public_id),
@@ -161,9 +179,11 @@ function createLiveControlController({
     async createSession(req, res) {
       try {
         const input = parseOrThrow(createSessionSchema, req.body);
+        const session = await sessionService.createDraft(input, req.userId);
+        notify('live_session_changed');
         return res.status(201).json({
           status: 'accepted',
-          session: await sessionService.createDraft(input, req.userId)
+          session
         });
       } catch (error) {
         return sendSongRequestError(res, error);
@@ -234,6 +254,7 @@ function createLiveControlController({
       try {
         const input = parseOrThrow(manualRequestSchema, req.body);
         const request = await requestService.createManualRequest(input, req.userId);
+        notify('song_request_created');
         return res.status(201).json({
           status: 'accepted',
           request: await requestService.getRequest(request.public_id)
@@ -266,13 +287,15 @@ function createLiveControlController({
     async setEtaPaused(req, res) {
       try {
         const input = parseOrThrow(etaPauseSchema, req.body);
+        const settings = await requestService.setEtaPaused(
+          input.paused,
+          input.expected_revision,
+          req.userId
+        );
+        notify('song_request_settings_changed');
         return res.json({
           status: 'accepted',
-          settings: await requestService.setEtaPaused(
-            input.paused,
-            input.expected_revision,
-            req.userId
-          )
+          settings
         });
       } catch (error) {
         return sendSongRequestError(res, error);
@@ -282,10 +305,12 @@ function createLiveControlController({
     async undoLastSongRequestAction(req, res) {
       try {
         const input = parseOrThrow(undoSchema, req.body);
-        return res.json(await requestService.undoLatest(
+        const result = await requestService.undoLatest(
           input.expected_revision,
           req.userId
-        ));
+        );
+        notify('song_request_changed');
+        return res.json(result);
       } catch (error) {
         return sendSongRequestError(res, error);
       }
@@ -325,6 +350,7 @@ function createLiveControlController({
       try {
         const input = parseOrThrow(assignRequestSchema, req.body);
         const request = await requestService.assignToSession(requestId(req), input, req.userId);
+        notify('song_request_changed');
         return res.json({
           status: 'accepted',
           request: await requestService.getRequest(request.public_id)
@@ -338,6 +364,7 @@ function createLiveControlController({
       try {
         const input = parseOrThrow(matchRequestSchema, req.body);
         const request = await requestService.setManualMatch(requestId(req), input, req.userId);
+        notify('song_request_changed');
         return res.json({
           status: 'accepted',
           request: await requestService.getRequest(request.public_id)
@@ -351,6 +378,7 @@ function createLiveControlController({
       try {
         const input = parseOrThrow(requestTransitionSchema, req.body);
         const request = await requestService.acceptUnmatched(requestId(req), input, req.userId);
+        notify('song_request_changed');
         return res.json({
           status: 'accepted',
           request: await requestService.getRequest(request.public_id)
@@ -377,6 +405,7 @@ function createLiveControlController({
           input,
           req.userId
         );
+        notify('song_request_changed');
         return res.json({
           status: 'accepted',
           request: await requestService.getRequest(request.public_id)
@@ -389,9 +418,11 @@ function createLiveControlController({
     async reorder(req, res) {
       try {
         const input = parseOrThrow(reorderSchema, req.body);
+        const result = await requestService.reorder(requestId(req), input, req.userId);
+        notify('song_request_changed');
         return res.json({
           status: 'accepted',
-          ...(await requestService.reorder(requestId(req), input, req.userId))
+          ...result
         });
       } catch (error) {
         return sendSongRequestError(res, error);

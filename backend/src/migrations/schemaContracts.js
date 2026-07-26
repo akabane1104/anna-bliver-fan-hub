@@ -276,6 +276,32 @@ const targetContracts = Object.freeze({
     index('idx_song_request_detail_reason', false, ['reason_code', 'updated_at'])
   ], [
     foreignKey('fk_song_request_detail_request', ['request_id'], 'song_requests', ['id'], 'CASCADE')
+  ]),
+
+  obs_overlay_events: table([
+    column('sequence', 'bigint unsigned', { auto_increment: true }),
+    asciiColumn('public_id', 'char(36)'),
+    textColumn(
+      'event_type',
+      "enum('gift_thanks','guard_alert','cotton_candy','ai_bubble','notice')"
+    ),
+    textColumn('source', "enum('manual','simulator','bilibili','ai')"),
+    column('payload_json', 'json'),
+    column('display_duration_ms', 'int unsigned'),
+    asciiColumn('idempotency_key', 'varchar(128)'),
+    column('created_by_user_id', 'int', { nullable: true }),
+    column('created_at', 'timestamp(3)', { default: 'CURRENT_TIMESTAMP(3)' }),
+    column('replay_until', 'datetime(3)'),
+    column('dismissed_at', 'datetime(3)', { nullable: true })
+  ], [
+    index('PRIMARY', true, ['sequence']),
+    index('idx_obs_overlay_created', false, ['created_at', 'sequence']),
+    index('idx_obs_overlay_creator', false, ['created_by_user_id']),
+    index('idx_obs_overlay_replay', false, ['dismissed_at', 'replay_until', 'sequence']),
+    index('unique_obs_overlay_public_id', true, ['public_id']),
+    index('unique_obs_overlay_source_idempotency', true, ['source', 'idempotency_key'])
+  ], [
+    foreignKey('fk_obs_overlay_creator', ['created_by_user_id'], 'users', ['id'], 'SET NULL')
   ])
 });
 
@@ -342,6 +368,13 @@ const migrationContracts = Object.freeze({
         columns: Object.freeze(['script_key'])
       })
     ])
+  }),
+  '202607240004': Object.freeze({
+    name: 'phase_4j_obs_overlays',
+    kind: 'tables',
+    depends_on: Object.freeze(['202607240003']),
+    tables: Object.freeze(['obs_overlay_events']),
+    indexes: Object.freeze([])
   })
 });
 

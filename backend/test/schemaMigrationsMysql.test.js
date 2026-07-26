@@ -384,7 +384,7 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           'live_events.idx_live_event_received'
         ]);
         assert.equal(runMigrationCli('postcheck', databases.fresh).applied, true);
-        assert.equal(await countAllTables(connection, databases.fresh), 30);
+        assert.equal(await countAllTables(connection, databases.fresh), 31);
         assert.deepEqual(await snapshotLegacy(connection, databases.fresh), before);
         freshStructures = await inspectTables(
           connection,
@@ -415,7 +415,7 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           'song_aliases.unique_song_alias_normalized',
           'song_aliases.unique_song_alias_script'
         ]);
-        assert.equal(await countAllTables(connection, databases.existing), 30);
+        assert.equal(await countAllTables(connection, databases.existing), 31);
         existingAfter = await snapshotLegacy(connection, databases.existing);
         assertLegacyUpgradePreserved(existingBefore, existingAfter);
         upgradedStructures = await inspectTables(
@@ -435,14 +435,14 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
         assert.equal(runMigrationCli('status', databases.existing).applied, true);
         const result = runMigrationCli('apply', databases.existing);
         assert.equal(result.outcome, 'noop');
-        assert.equal(await tableCount(connection, 'schema_migrations'), 3);
+        assert.equal(await tableCount(connection, 'schema_migrations'), 4);
         assert.deepEqual(await snapshotLegacy(connection, databases.existing), before);
         const [ledgerRows] = await connection.query(
           'SELECT version FROM schema_migrations ORDER BY version'
         );
         assert.deepEqual(
           ledgerRows.map(({ version }) => version),
-          ['202607240001', '202607240002', '202607240003']
+          ['202607240001', '202607240002', '202607240003', '202607240004']
         );
 
         const blocker = await connectDatabase(databases.existing);
@@ -574,9 +574,10 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           'song_request_history',
           'song_aliases',
           'song_request_policies',
-          'song_request_details'
+          'song_request_details',
+          'obs_overlay_events'
         ]);
-        assert.equal(await countAllTables(connection, databases.partial), 30);
+        assert.equal(await countAllTables(connection, databases.partial), 31);
       } finally {
         await connection.end();
       }
@@ -658,7 +659,7 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           ),
           targetDataBefore
         );
-        assert.equal(await tableCount(connection, 'schema_migrations'), 3);
+        assert.equal(await tableCount(connection, 'schema_migrations'), 4);
       } finally {
         await connection.end();
       }

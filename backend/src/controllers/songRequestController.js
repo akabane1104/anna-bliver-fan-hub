@@ -11,6 +11,9 @@ const {
 const { defaultSongCatalogService } = require('../services/songCatalogService');
 const { defaultSongRequestService } = require('../services/songRequestService');
 const { SongRequestError } = require('../utils/songRequestError');
+const {
+  defaultObsOverlayRealtime
+} = require('../services/obsOverlayRealtime');
 
 function parseOrThrow(schema, value, code = 'invalid_request') {
   const result = schema.safeParse(value);
@@ -34,7 +37,8 @@ function sendSongRequestError(res, error) {
 
 function createSongRequestController({
   service = defaultSongRequestService,
-  catalogService = defaultSongCatalogService
+  catalogService = defaultSongCatalogService,
+  realtime = defaultObsOverlayRealtime
 } = {}) {
   return {
     async create(req, res) {
@@ -55,6 +59,7 @@ function createSongRequestController({
         const request = typeof service.getOwnRequest === 'function'
           ? await service.getOwnRequest(result.request.public_id, req.userId)
           : await service.getPublicRequest(result.request.public_id);
+        if (!result.duplicate) realtime.publish('song_request_created');
         return res.status(result.duplicate ? 200 : 201).json({
           status: result.duplicate ? 'duplicate' : 'accepted',
           request
@@ -93,13 +98,15 @@ function createSongRequestController({
           'invalid_request_id'
         ).publicId;
         const input = parseOrThrow(withdrawRequestSchema, req.body);
+        const request = await service.withdraw(
+          publicId,
+          req.userId,
+          input.expected_revision ?? null
+        );
+        realtime.publish('song_request_withdrawn');
         return res.json({
           status: 'accepted',
-          request: await service.withdraw(
-            publicId,
-            req.userId,
-            input.expected_revision ?? null
-          )
+          request
         });
       } catch (error) {
         return sendSongRequestError(res, error);
@@ -123,6 +130,7 @@ function createSongRequestController({
           );
         }
         const result = await service.rerequest(publicId, req.userId, idempotencyKey);
+        if (!result.duplicate) realtime.publish('song_request_created');
         return res.status(result.duplicate ? 200 : 201).json({
           status: result.duplicate ? 'duplicate' : 'accepted',
           request: await service.getOwnRequest(result.request.public_id, req.userId)
