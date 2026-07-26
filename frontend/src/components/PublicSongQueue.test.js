@@ -18,42 +18,73 @@ describe('PublicSongQueue', () => {
     container.remove();
   });
 
-  test('renders the no-session and empty queue state', () => {
+  test('renders the closed and empty queue state', () => {
     act(() => {
       root.render(
         <PublicSongQueue
-          data={{ session: null, requests: [] }}
+          data={{
+            public: {
+              effectiveOpen: false,
+              closeReason: '主播休息中',
+              capacityCount: 0,
+              queueLimit: 12,
+              reopenThreshold: 8,
+              queue: [],
+              todayCompleted: []
+            }
+          }}
           loading={false}
           error=""
           onRetry={() => {}}
         />
       );
     });
-    expect(container.textContent).toContain('当前还没有开放点歌');
-    expect(container.textContent).toContain('歌单仍可浏览');
+    expect(container.textContent).toContain('点歌已关闭：主播休息中');
+    expect(container.textContent).toContain('等待队列为空');
   });
 
-  test('renders current, next, total, and safe requester display name', () => {
+  test('renders public DTO fields without exposing raw identities or ids', () => {
     act(() => {
       root.render(
         <PublicSongQueue
           data={{
-            session: { public_id: 'safe-session', status: 'open' },
-            requests: [
-              {
-                public_id: 'active',
-                status: 'active',
-                requested_title: '年轮',
-                matched_song: { title: '年轮', artist: 'Synthetic Artist' }
+            public: {
+              effectiveOpen: true,
+              capacityCount: 2,
+              queueLimit: 12,
+              reopenThreshold: 8,
+              current: {
+                displayKey: 'current-key',
+                status: 'singing',
+                canonicalSong: { title: '年轮', artist: 'Synthetic Artist' },
+                maskedDisplayName: 'A***a',
+                eta: { minMinutes: 0, maxMinutes: 0 },
+                isMine: false
               },
-              {
-                public_id: 'next',
+              next: {
+                displayKey: 'next-key',
                 status: 'queued',
-                queue_order: '2',
-                requested_title: '后来',
-                requester_display_name: 'Synthetic Viewer'
-              }
-            ]
+                position: 2,
+                canonicalSong: { title: '后来', artist: 'Synthetic Artist' },
+                maskedDisplayName: 'S***r',
+                eta: { minMinutes: 4, maxMinutes: 7 },
+                isMine: true
+              },
+              queue: [{
+                displayKey: 'next-key',
+                position: 2,
+                canonicalSong: { title: '后来', artist: 'Synthetic Artist' },
+                maskedDisplayName: 'S***r',
+                eta: { minMinutes: 4, maxMinutes: 7 },
+                status: 'queued',
+                isMine: true,
+                public_id: 'must-not-render',
+                requester_display_name: 'Raw Synthetic Viewer',
+                user_id: 42
+              }],
+              todayCompleted: [],
+              updatedAt: '2026-07-26T10:00:00.000Z'
+            }
           }}
           loading={false}
           error=""
@@ -63,9 +94,12 @@ describe('PublicSongQueue', () => {
     });
     expect(container.textContent).toContain('年轮');
     expect(container.textContent).toContain('后来');
-    expect(container.textContent).toContain('Synthetic Viewer');
-    expect(container.textContent).toContain('1首歌曲');
-    expect(container.textContent).not.toMatch(/open_id|user_id|event_id/);
+    expect(container.textContent).toContain('S***r');
+    expect(container.textContent).toContain('约 4–7 分钟');
+    expect(container.textContent).toContain('我的点歌');
+    expect(container.textContent).not.toContain('Raw Synthetic Viewer');
+    expect(container.textContent).not.toContain('must-not-render');
+    expect(container.textContent).not.toMatch(/open_id|user_id|event_id|public_id/);
   });
 
   test('shows loading, errors, accepted state, and supports retry', () => {

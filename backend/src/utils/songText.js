@@ -45,12 +45,16 @@ function normalizeSongText(value, options = {}) {
     throw new SongTextError('empty_text', '文本不能为空');
   }
   const scriptKey = toSimplified(whitespaceNormalized);
+  const punctuationKey = scriptKey
+    .toLocaleLowerCase('en-US')
+    .replace(/[\p{P}\p{S}\s]+/gu, '');
   return Object.freeze({
     raw_text: rawText,
     nfkc_text: nfkcText,
     whitespace_normalized: whitespaceNormalized,
     script_key: scriptKey,
-    loose_candidate_key: scriptKey.toLocaleLowerCase('en-US')
+    loose_candidate_key: scriptKey.toLocaleLowerCase('en-US'),
+    punctuation_key: punctuationKey
   });
 }
 

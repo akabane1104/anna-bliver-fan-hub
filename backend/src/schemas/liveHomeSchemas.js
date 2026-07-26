@@ -66,7 +66,15 @@ const liveHomeAdvanceSchema = z.object({
   expected_version: z.number().int().min(0).max(2147483647),
   outcome: z.enum(['completed', 'skipped']),
   activate_next: z.boolean(),
-  reason: safeText(500).optional()
+  reason: safeText(500).optional(),
+  reason_code: z.enum([
+    'manual_skip',
+    'technical_issue',
+    'singer_unavailable',
+    'other'
+  ]).optional(),
+  public_reason: safeText(200).optional(),
+  internal_note: safeText(500).optional()
 }).strict();
 
 const listenerStatusReportSchema = z.object({

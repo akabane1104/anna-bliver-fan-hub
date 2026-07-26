@@ -33,14 +33,14 @@ function buildCoreScenarios(config) {
     scenario: 'duplicate',
     step: 1,
     actorKey: 'viewer-duplicate',
-    text: '点歌 年轮'
+    text: '点歌 Simulator Duplicate'
   });
   const conflictOriginal = createDanmakuEvent({
     config,
     scenario: 'conflict',
     step: 1,
     actorKey: 'viewer-conflict',
-    text: '点歌 年轮'
+    text: '点歌 Simulator Conflict'
   });
   const conflictChanged = createDanmakuEvent({
     config,
@@ -60,7 +60,7 @@ function buildCoreScenarios(config) {
         text: '点歌 年轮'
       }), ACK.accepted)
     ]),
-    scenario('traditional-request', 1, [
+    scenario('traditional-request', 0, [
       step(createDanmakuEvent({
         config,
         scenario: 'traditional-request',
@@ -136,20 +136,20 @@ function buildCoreScenarios(config) {
       step(conflictOriginal, ACK.accepted),
       step(conflictChanged, ACK.conflict)
     ]),
-    scenario('same-song-viewers', 2, [
+    scenario('same-song-viewers', 1, [
       step(createDanmakuEvent({
         config,
         scenario: 'same-song-viewers',
         step: 1,
         actorKey: 'viewer-one',
-        text: '点歌 年轮'
+        text: '点歌 Simulator Shared'
       }), ACK.accepted),
       step(createDanmakuEvent({
         config,
         scenario: 'same-song-viewers',
         step: 2,
         actorKey: 'viewer-two',
-        text: '点歌 年轮'
+        text: '点歌 Simulator Shared'
       }), ACK.accepted)
     ]),
     scenario('gift-event', 0, [
@@ -170,7 +170,7 @@ function buildRollbackScenario(config) {
       scenario: 'transaction-rollback',
       step: 1,
       actorKey: 'viewer-rollback',
-      text: '点歌 年轮'
+      text: '点歌 Simulator Rollback'
     }), ACK.databaseError)
   ]);
 }

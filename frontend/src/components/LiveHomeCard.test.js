@@ -83,7 +83,8 @@ describe('LiveHomeCard', () => {
     expect(container.textContent).toContain('队列里还没有下一首');
     expect(container.textContent).toContain('排队 0 首');
     expect(container.textContent).toContain('点歌已关闭');
-    expect(container.querySelector('a')).toBeNull();
+    expect(container.querySelector('a[href="/song-requests"]')).not.toBeNull();
+    expect(container.querySelector('a[href^="https://live.bilibili.com"]')).toBeNull();
   });
 
   test('keeps syncing content but hides offline mode outside previews', () => {

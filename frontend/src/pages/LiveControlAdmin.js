@@ -10,7 +10,11 @@ import { InlineAlert, useFeedback } from '../components/FeedbackProvider';
 import LiveAdminNav from '../components/LiveAdminNav';
 import LiveHomeCard from '../components/LiveHomeCard';
 import { liveAdminService, songRequestService } from '../services';
-import { requestErrorMessage } from '../utils/songRequestUi';
+import {
+  formatEtaRange,
+  requestErrorMessage,
+  REQUEST_REASON_LABELS
+} from '../utils/songRequestUi';
 import usePollingResource from '../utils/usePollingResource';
 
 const EMPTY_ACTIVITY = Object.freeze({
@@ -61,10 +65,14 @@ function controlQueue(home) {
   const source = home?.control?.queue || {};
   const waiting = Array.isArray(source.waiting) ? source.waiting : [];
   return {
+    session: source.session || null,
     active: source.current || null,
-    next: waiting[0] || null,
+    next: waiting.find(({ status }) => status === 'queued') || null,
     waiting,
-    waitingCount: Number(source.waiting_count || 0)
+    waitingCount: Number(source.waiting_count || 0),
+    pendingCount: waiting.filter(({ status }) => (
+      status === 'needs_match' || status === 'observed' || status === 'pending_review'
+    )).length
   };
 }
 
@@ -79,6 +87,9 @@ function LiveControlAdmin() {
   const [overrideHours, setOverrideHours] = useState('4');
   const [activity, setActivity] = useState(EMPTY_ACTIVITY);
   const [activityDirty, setActivityDirty] = useState(false);
+  const [skipReason, setSkipReason] = useState('manual_skip');
+  const [skipPublicReason, setSkipPublicReason] = useState('');
+  const [skipInternalNote, setSkipInternalNote] = useState('');
   const loader = useCallback(loadAdminControl, []);
   const resource = usePollingResource(loader, {
     intervalMs: adminPollInterval,
@@ -148,7 +159,12 @@ function LiveControlAdmin() {
       () => liveAdminService.advanceCurrent(queue.active.public_id, {
         expected_version: queue.active.version,
         outcome,
-        activate_next: activateNext
+        activate_next: activateNext,
+        ...(outcome === 'skipped' ? {
+          reason_code: skipReason,
+          public_reason: skipPublicReason.trim(),
+          internal_note: skipInternalNote.trim()
+        } : {})
       }),
       activateNext ? '当前歌曲已处理并切换下一首' : '当前歌曲状态已更新'
     );
@@ -164,6 +180,25 @@ function LiveControlAdmin() {
         request.version
       ),
       '已设为正在唱'
+    );
+  };
+
+  const setNextRequest = (request) => {
+    if (!request || request.status !== 'queued' || !queue.session) {
+      return Promise.resolve(false);
+    }
+    const reordered = [
+      request,
+      ...queue.waiting.filter(({ public_id }) => public_id !== request.public_id)
+    ];
+    return runAction(
+      `set-next:${request.public_id}`,
+      () => songRequestService.reorder(
+        queue.session.public_id,
+        queue.session.version,
+        reordered.map(({ public_id }) => public_id)
+      ),
+      '下一首已更新'
     );
   };
 
@@ -203,7 +238,40 @@ function LiveControlAdmin() {
     setActivityDirty(true);
   };
 
+  const toggleEtaPaused = () => runAction(
+    'eta-paused',
+    () => liveAdminService.setEtaPaused(
+      !home?.control?.eta?.paused,
+      home?.control?.eta?.revision
+    ),
+    home?.control?.eta?.paused ? 'ETA 已恢复' : 'ETA 已暂停'
+  );
+
+  const undoLastAction = () => runAction(
+    'undo',
+    () => liveAdminService.undoLastAction(
+      home?.control?.undo?.expected_revision
+      ?? home?.control?.queue?.revision
+    ),
+    '最近一次队列操作已撤销'
+  );
+
   const overrideMode = home?.control?.override_mode || 'auto';
+  const songRequestManualOpen = Boolean(
+    home?.song_requests?.manualOpen
+    ?? home?.song_requests?.manual_open
+    ?? home?.song_requests?.open
+  );
+  const songRequestEffectiveOpen = Boolean(
+    home?.song_requests?.effectiveOpen
+    ?? home?.song_requests?.effective_open
+    ?? home?.song_requests?.open
+  );
+  const songRequestCloseReason = (
+    home?.song_requests?.closeReason
+    || home?.song_requests?.close_reason
+    || ''
+  );
   const isBusy = pending.size > 0;
 
   return (
@@ -289,31 +357,48 @@ function LiveControlAdmin() {
               <header>
                 <div>
                   <span>点歌队列</span>
-                  <h2>{home.song_requests?.open ? '开放点歌' : '点歌已关闭'}</h2>
+                  <h2>{songRequestEffectiveOpen ? '开放点歌' : '点歌已关闭'}</h2>
                 </div>
                 <label className="live-control-toggle">
                   <input
                     type="checkbox"
-                    checked={Boolean(home.song_requests?.open)}
+                    checked={songRequestManualOpen}
                     disabled={isBusy}
                     onChange={(event) => setSongRequestsOpen(event.target.checked)}
                   />
-                  <span>开放点歌</span>
+                  <span>手动开放</span>
                 </label>
               </header>
+              {!songRequestEffectiveOpen && songRequestCloseReason && (
+                <p className="live-control-close-reason">{songRequestCloseReason}</p>
+              )}
               <div className="live-control-song">
                 <span>正在唱</span>
                 <strong title={queue.active ? controlSongTitle(queue.active) : ''}>
                   {queue.active ? controlSongTitle(queue.active) : '目前没有歌曲'}
                 </strong>
+                {queue.active && <small>{formatEtaRange(queue.active.eta)}</small>}
               </div>
               <div className="live-control-song">
                 <span>下一首</span>
                 <strong title={queue.next ? controlSongTitle(queue.next) : ''}>
                   {queue.next ? controlSongTitle(queue.next) : '队列为空'}
                 </strong>
+                {queue.next && <small>{formatEtaRange(queue.next.eta)}</small>}
               </div>
-              <p className="live-control-count">等待 {queue.waitingCount} 首</p>
+              <div className="live-control-queue-meta">
+                <p className="live-control-count">等待 {queue.waitingCount} 首</p>
+                <span>待审核 {queue.pendingCount} 首</span>
+                <span>Revision {home.control?.queue?.revision ?? '-'}</span>
+                <button type="button" onClick={toggleEtaPaused} disabled={isBusy}>
+                  {home.control?.eta?.paused ? '恢复 ETA' : '暂停 ETA'}
+                </button>
+                {home.control?.undo?.available && (
+                  <button type="button" onClick={undoLastAction} disabled={isBusy}>
+                    撤销（{Number(home.control.undo.seconds_remaining ?? 30)} 秒）
+                  </button>
+                )}
+              </div>
               {queue.waiting.length > 0 && (
                 <ul className="live-control-waiting" aria-label="等待点歌队列">
                   {queue.waiting.map((request) => (
@@ -324,15 +409,49 @@ function LiveControlAdmin() {
                       <button
                         type="button"
                         aria-label={`设为正在唱：${controlSongTitle(request)}`}
-                        disabled={isBusy || Boolean(queue.active)}
+                        disabled={isBusy || Boolean(queue.active) || request.status !== 'queued'}
                         onClick={() => activateRequest(request)}
                       >
                         设为当前
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`设为下一首：${controlSongTitle(request)}`}
+                        disabled={isBusy || request.status !== 'queued' || !queue.session}
+                        onClick={() => setNextRequest(request)}
+                      >
+                        设为下一首
                       </button>
                     </li>
                   ))}
                 </ul>
               )}
+              <div className="live-control-reason">
+                <label>
+                  跳过原因
+                  <select value={skipReason} onChange={(event) => setSkipReason(event.target.value)}>
+                    {['manual_skip', 'technical_issue', 'singer_unavailable', 'other'].map((code) => (
+                      <option key={code} value={code}>{REQUEST_REASON_LABELS[code]}</option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  给观众的说明
+                  <input
+                    value={skipPublicReason}
+                    maxLength="200"
+                    onChange={(event) => setSkipPublicReason(event.target.value)}
+                  />
+                </label>
+                <label>
+                  内部备注
+                  <input
+                    value={skipInternalNote}
+                    maxLength="500"
+                    onChange={(event) => setSkipInternalNote(event.target.value)}
+                  />
+                </label>
+              </div>
               <div className="live-control-actions">
                 <button type="button" disabled={isBusy || !queue.active} onClick={() => advance('completed', false)}>唱完</button>
                 <button type="button" disabled={isBusy || !queue.active || !queue.next} onClick={() => advance('completed', true)}>唱完并下一首</button>

@@ -606,6 +606,15 @@
   border-block: 1px solid var(--theme-border-soft);
 }
 
+.live-control-close-reason {
+  margin: 0.7rem 0 0;
+  padding: 0.65rem 0.75rem;
+  border-left: 3px solid var(--warning-color);
+  background: var(--theme-warning-surface);
+  color: var(--text-dark);
+  overflow-wrap: anywhere;
+}
+
 .live-control-expiry,
 .live-control-form label {
   display: grid;
@@ -699,6 +708,70 @@
   margin: 0.7rem 0;
 }
 
+.live-control-queue-meta {
+  display: flex;
+  min-height: 44px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.45rem 0.7rem;
+  margin: 0.45rem 0 0.75rem;
+}
+
+.live-control-queue-meta .live-control-count {
+  margin: 0;
+  margin-right: auto;
+}
+
+.live-control-queue-meta > span {
+  color: var(--text-light);
+  font-size: 0.8rem;
+}
+
+.live-control-queue-meta button {
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--theme-border-soft);
+  border-radius: 6px;
+  background: var(--theme-card-surface-alt);
+  color: var(--text-dark);
+  font: inherit;
+  cursor: pointer;
+}
+
+.live-control-reason {
+  display: grid;
+  grid-template-columns: minmax(140px, 0.65fr) minmax(180px, 1.35fr);
+  gap: 0.55rem;
+  margin: 0.75rem 0;
+}
+
+.live-control-reason label {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+  color: var(--text-light);
+  font-size: 0.8rem;
+}
+
+.live-control-reason select,
+.live-control-reason input {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--theme-border-soft);
+  border-radius: 6px;
+  background: var(--theme-input-surface);
+  color: var(--text-dark);
+  font: inherit;
+}
+
+.live-control-reason select:focus-visible,
+.live-control-reason input:focus-visible {
+  outline: 3px solid var(--theme-focus-ring);
+  outline-offset: 2px;
+}
+
 .live-control-waiting {
   display: grid;
   gap: 0.4rem;
@@ -711,7 +784,7 @@
 
 .live-control-waiting li {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   gap: 0.55rem;
   align-items: center;
   min-width: 0;
@@ -930,8 +1003,18 @@
 
   .live-control-segments,
   .live-control-actions,
-  .live-control-form {
+  .live-control-form,
+  .live-control-reason {
     grid-template-columns: 1fr;
+  }
+
+  .live-control-queue-meta {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .live-control-queue-meta .live-control-count {
+    margin-right: 0;
   }
 
   .live-control-form-wide {
@@ -940,6 +1023,14 @@
 
   .live-control-form-actions button {
     width: 100%;
+  }
+
+  .live-control-waiting li {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .live-control-waiting li > span {
+    grid-column: 1 / -1;
   }
 }
 

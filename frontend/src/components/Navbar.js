@@ -68,7 +68,7 @@ function Navbar() {
           </button>
         </div>
         <ul className={isMenuOpen ? 'navbar-links active' : 'navbar-links'}>
-          <li><Link to="/playlists" onClick={closeMenu}>网页歌单</Link></li>
+          <li><Link to="/song-requests" onClick={closeMenu}>点歌中心</Link></li>
           <li><Link to="/marshmallows" onClick={closeMenu}>棉花糖</Link></li>
           {isAuthenticated && user ? <>
             <li><Link to="/prizes" onClick={closeMenu}>积分商城</Link></li>

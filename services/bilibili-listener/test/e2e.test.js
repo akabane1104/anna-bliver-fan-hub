@@ -213,6 +213,44 @@ VALUES (
   'admin'
 );
 SET @phase4e_admin_id = LAST_INSERT_ID();
+INSERT INTO users (username, email, password, role)
+VALUES
+  (
+    'phase4e_viewer_a',
+    'phase4e-viewer-a@example.com',
+    'synthetic-not-a-real-password-hash',
+    'user'
+  ),
+  (
+    'phase4e_viewer_b',
+    'phase4e-viewer-b@example.com',
+    'synthetic-not-a-real-password-hash',
+    'user'
+  ),
+  (
+    'phase4f_viewer',
+    'phase4f-viewer@example.com',
+    'synthetic-not-a-real-password-hash',
+    'user'
+  );
+INSERT INTO user_bilibili_bindings (
+  user_id, bilibili_uid, bilibili_open_id, bilibili_uname, status
+)
+SELECT id, '9100000000001', 'phase4e.synthetic.phase4e-e2e-danmaku',
+       'Synthetic Listener Viewer', 'verified'
+FROM users WHERE username = 'phase4e_viewer_a';
+INSERT INTO user_bilibili_bindings (
+  user_id, bilibili_uid, bilibili_open_id, bilibili_uname, status
+)
+SELECT id, '9100000000002', 'phase4e.synthetic.phase4e-e2e-retry',
+       'Synthetic Listener Viewer', 'verified'
+FROM users WHERE username = 'phase4e_viewer_b';
+INSERT INTO user_bilibili_bindings (
+  user_id, bilibili_uid, bilibili_open_id, bilibili_uname, status
+)
+SELECT id, '9100000000003', 'synthetic-open-id-1',
+       'synthetic-user', 'verified'
+FROM users WHERE username = 'phase4f_viewer';
 INSERT INTO playlists (title, description, created_by)
 VALUES (
   'Phase 4E Synthetic Playlist',
@@ -281,8 +319,8 @@ SELECT JSON_OBJECT(
     WHERE source_event_id =
       'synthetic:${SYNTHETIC_ROOM_ID}:phase4e-e2e-danmaku'
   ),
-  'retry_request_once', (
-    SELECT COUNT(*) = 1
+  'retry_request_absent', (
+    SELECT COUNT(*) = 0
     FROM song_requests
     WHERE source_event_id =
       'synthetic:${SYNTHETIC_ROOM_ID}:phase4e-e2e-retry'
@@ -614,16 +652,16 @@ test('silent listener delivers synthetic events through isolated Backend and MyS
       mysqlInput(composeArgs, dockerContext, assertionSql()).stdout.trim()
     );
     assert.equal(Number(report.live_events), 3);
-    assert.equal(Number(report.song_requests), 2);
-    assert.equal(Number(report.history), 2);
-    assert.equal(Number(report.users), 1);
+    assert.equal(Number(report.song_requests), 1);
+    assert.equal(Number(report.history), 1);
+    assert.equal(Number(report.users), 4);
     assert.equal(Number(report.permissions), 0);
     assert.equal(Number(report.wallets), 0);
     assert.equal(Number(report.accounts), 0);
     assert.equal(Number(report.transactions), 0);
     for (const key of [
       'danmaku_request_once',
-      'retry_request_once',
+      'retry_request_absent',
       'gift_request_absent',
       'conflict_preserved',
       'all_synthetic'
@@ -744,8 +782,8 @@ test('silent listener delivers synthetic events through isolated Backend and MyS
       ).stdout.trim()
     );
     assert.equal(Number(officialReport.live_events), 5);
-    assert.equal(Number(officialReport.song_requests), 3);
-    assert.equal(Number(officialReport.history), 3);
+    assert.equal(Number(officialReport.song_requests), 2);
+    assert.equal(Number(officialReport.history), 2);
     for (const key of [
       'official_dm_once',
       'official_gift_once',
@@ -766,7 +804,7 @@ test('silent listener delivers synthetic events through isolated Backend and MyS
     assert.doesNotMatch(backendLogs, new RegExp(ingestSecret));
     console.log(
       '[phase4e-e2e] http=201:3,200:1,409:1,500:1 ' +
-      'official=201:2,200:1 db=5/3/3 points=0/0/0'
+      'official=201:2,200:1 db=5/2/2 points=0/0/0'
     );
   } finally {
     process.off('SIGINT', onSigint);

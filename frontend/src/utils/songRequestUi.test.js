@@ -1,8 +1,12 @@
 import {
   createIdempotencyKey,
   createRequestCoordinator,
+  formatEtaRange,
   getRequestDisplayTitle,
   isReorderable,
+  normalizeQueueItem,
+  normalizeRequestStatus,
+  normalizeSongRequestCenter,
   requestErrorMessage,
   splitCurrentQueue
 } from './songRequestUi';
@@ -82,6 +86,40 @@ describe('song request UI helpers', () => {
     expect(isReorderable({ status: 'queued' })).toBe(true);
     expect(isReorderable({ status: 'active' })).toBe(false);
     expect(isReorderable({ status: 'completed' })).toBe(false);
+  });
+
+  test('normalizes canonical statuses and ETA ranges', () => {
+    expect(normalizeRequestStatus('observed')).toBe('pending_review');
+    expect(normalizeRequestStatus('active')).toBe('singing');
+    expect(normalizeRequestStatus('cancelled')).toBe('withdrawn');
+    expect(formatEtaRange({ min_minutes: 4, max_minutes: 7 })).toBe('约 4–7 分钟');
+    expect(formatEtaRange({ paused: true })).toBe('时间估算已暂停');
+  });
+
+  test('public queue normalization drops raw ids and unmasked requester names', () => {
+    const item = normalizeQueueItem({
+      public_id: 'private-id',
+      user_id: 42,
+      requester_display_name: 'Raw Name',
+      display_key: 'safe-key',
+      position: 3,
+      canonical_song: { title: '年轮' },
+      masked_display_name: 'R***e',
+      status: 'queued',
+      is_mine: true
+    });
+    expect(item).toEqual({
+      displayKey: 'safe-key',
+      position: 3,
+      canonicalSong: { title: '年轮' },
+      maskedDisplayName: 'R***e',
+      eta: null,
+      status: 'queued',
+      isMine: true
+    });
+    expect(item).not.toHaveProperty('public_id');
+    expect(item).not.toHaveProperty('user_id');
+    expect(normalizeSongRequestCenter(null).queue).toEqual([]);
   });
 
   test('newer success wins when an older success arrives later', async () => {

@@ -1,6 +1,11 @@
 const database = require('../config/database');
 const { runInTransaction } = require('../utils/databaseTransaction');
 const { SongRequestError } = require('../utils/songRequestError');
+const {
+  getQueueMetrics,
+  loadPolicySettings,
+  settingsProjection
+} = require('./songRequestPolicyService');
 
 const SETTING_KEYS = Object.freeze({
   overrideMode: 'live_home_override_mode',
@@ -48,6 +53,11 @@ function parseBoolean(value, fallback = false) {
   if (value === 'true') return true;
   if (value === 'false') return false;
   return fallback;
+}
+
+function historyAgeMs(row) {
+  const value = Number(row?.age_ms);
+  return Number.isFinite(value) ? Math.max(0, value) : Number.POSITIVE_INFINITY;
 }
 
 function sanitizePublicText(value, fallback, maxLength) {
@@ -172,6 +182,7 @@ function publicSupport(row) {
 function buildPublicHome({
   settings,
   queue,
+  songControl = null,
   supportRows,
   nowMs,
   roomId
@@ -185,10 +196,21 @@ function buildPublicHome({
       : (state.mode === 'syncing' ? '重新同步中' : '目前未开播'),
     room_url: safeRoomUrl(roomId),
     song_requests: {
-      open: parseBoolean(settings.get(SETTING_KEYS.songRequestsOpen), true),
+      open: songControl?.manual_open
+        ?? parseBoolean(settings.get(SETTING_KEYS.songRequestsOpen), true),
+      effective_open: songControl?.effective_open
+        ?? parseBoolean(settings.get(SETTING_KEYS.songRequestsOpen), true),
+      auto_capacity_blocked: songControl?.auto_capacity_blocked ?? false,
+      close_reason: songControl?.close_reason || null,
       queue_count: queue.waitingCount,
-      current: publicSong(queue.current),
-      next: publicSong(queue.next)
+      current: queue.current ? {
+        ...publicSong(queue.current),
+        eta: songControl?.eta_by_public_id?.get(queue.current.public_id) || null
+      } : null,
+      next: queue.next ? {
+        ...publicSong(queue.next),
+        eta: songControl?.eta_by_public_id?.get(queue.next.public_id) || null
+      } : null
     },
     activity: currentActivity(settings, nowMs),
     recent_support: supportRows.map(publicSupport),
@@ -239,7 +261,7 @@ function createLiveHomeRepository({
         : '';
       const [rows] = await pool.query(
         `WITH selected_session AS (
-           SELECT id
+           SELECT id, public_id, version
            FROM live_sessions
            WHERE status IN ('open', 'paused')
              ${targetWhere}
@@ -250,7 +272,8 @@ function createLiveHomeRepository({
            LIMIT 1
          )
          SELECT sr.public_id, sr.requested_title, sr.status, sr.queue_order,
-                sr.version,
+                sr.version, session.public_id AS session_public_id,
+                session.version AS session_version,
                 s.title AS song_title, s.artist AS song_artist,
                 SUM(
                   CASE WHEN sr.status IN ('needs_match', 'queued') THEN 1 ELSE 0 END
@@ -272,10 +295,96 @@ function createLiveHomeRepository({
         .filter((row) => ['needs_match', 'queued'].includes(row.status))
         .slice(0, 500);
       return {
+        session: rows.length ? {
+          public_id: rows[0].session_public_id,
+          version: Number(rows[0].session_version)
+        } : null,
         current,
-        next: waiting[0] || null,
+        next: waiting.find((request) => request.status === 'queued') || null,
         waiting,
         waitingCount: Number(rows[0]?.waiting_count || 0)
+      };
+    },
+
+    async getSongRequestControl() {
+      const targetWhere = targetConfigured
+        ? 'AND site_id = ? AND room_id = ?'
+        : '';
+      const [sessions] = await pool.query(
+        `SELECT id
+         FROM live_sessions
+         WHERE status IN ('open', 'paused')
+           ${targetWhere}
+         ORDER BY
+           CASE status WHEN 'open' THEN 0 ELSE 1 END,
+           COALESCE(started_at, created_at) DESC,
+           id DESC
+         LIMIT 1`,
+        targetConfigured ? [normalizedSiteId, normalizedRoomId] : []
+      );
+      const sessionId = sessions[0]?.id || null;
+      const settings = await loadPolicySettings(pool);
+      const config = settingsProjection(settings);
+      const metrics = await getQueueMetrics(pool, sessionId, settings);
+      const [latestRows] = sessionId
+        ? await pool.query(
+          `SELECT h.id, h.created_at, h.metadata,
+                  TIMESTAMPDIFF(
+                    MICROSECOND, h.created_at, UTC_TIMESTAMP(3)
+                  ) / 1000 AS age_ms
+           FROM song_request_history h
+           INNER JOIN song_requests sr ON sr.id = h.request_id
+           WHERE sr.session_id = ?
+           ORDER BY h.id DESC
+           LIMIT 1`,
+          [sessionId]
+        )
+        : [[]];
+      const latest = latestRows[0] || null;
+      let latestMetadata = {};
+      if (latest?.metadata) {
+        try {
+          latestMetadata = typeof latest.metadata === 'object'
+            ? latest.metadata
+            : JSON.parse(latest.metadata);
+        } catch {
+          latestMetadata = {};
+        }
+      }
+      const undoAvailable = Boolean(
+        latest
+        && latestMetadata.before
+        && historyAgeMs(latest) <= 30_000
+      );
+      return {
+        manual_open: config.manual_open,
+        auto_capacity_blocked: config.auto_capacity_blocked,
+        effective_open: Boolean(
+          sessionId && config.manual_open && !config.auto_capacity_blocked
+        ),
+        close_reason: !sessionId
+          ? 'requests_closed'
+          : (!config.manual_open
+            ? 'requests_closed'
+            : (config.auto_capacity_blocked ? 'queue_capacity_reached' : null)),
+        eta_paused: config.eta_paused,
+        eta_by_public_id: new Map(
+          metrics.requests.map((request) => [request.public_id, request.eta])
+        ),
+        settings_revision: config.revision,
+        revision: latest ? Number(latest.id) : 0,
+        undo: {
+          available: undoAvailable,
+          expected_revision: latest ? Number(latest.id) : 0,
+          seconds_remaining: undoAvailable
+            ? Math.max(
+              0,
+              Math.ceil(
+                (30_000 - historyAgeMs(latest)) / 1000
+              )
+            )
+            : 0
+        }
       };
     },
 
@@ -311,24 +420,44 @@ function createLiveHomeService({
   const service = {
     async getPublicHome() {
       const nowMs = clock();
-      const [settings, queue, supportRows] = await Promise.all([
+      const [settings, queue, supportRows, songControl] = await Promise.all([
         repository.loadSettings(),
         repository.getQueue(),
-        repository.getRecentSupport()
+        repository.getRecentSupport(),
+        typeof repository.getSongRequestControl === 'function'
+          ? repository.getSongRequestControl()
+          : null
       ]);
-      return buildPublicHome({ settings, queue, supportRows, nowMs, roomId });
+      return buildPublicHome({
+        settings,
+        queue,
+        songControl,
+        supportRows,
+        nowMs,
+        roomId
+      });
     },
 
     async getAdminHome() {
       const nowMs = clock();
-      const [settings, queue, supportRows] = await Promise.all([
+      const [settings, queue, supportRows, songControl] = await Promise.all([
         repository.loadSettings(),
         repository.getQueue(),
-        repository.getRecentSupport()
+        repository.getRecentSupport(),
+        typeof repository.getSongRequestControl === 'function'
+          ? repository.getSongRequestControl()
+          : null
       ]);
       const resolved = resolveLiveMode(settings, nowMs);
       return {
-        ...buildPublicHome({ settings, queue, supportRows, nowMs, roomId }),
+        ...buildPublicHome({
+          settings,
+          queue,
+          songControl,
+          supportRows,
+          nowMs,
+          roomId
+        }),
         control: {
           override_mode: settings.get(SETTING_KEYS.overrideMode) || 'auto',
           override_expires_at: toIso(settings.get(SETTING_KEYS.overrideExpiresAt)),
@@ -347,11 +476,13 @@ function createLiveHomeService({
           },
           room_id_configured: Boolean(safeRoomUrl(roomId)),
           queue: {
+            ...(queue.session ? { session: queue.session } : {}),
             current: queue.current
               ? {
                 public_id: queue.current.public_id,
                 version: Number(queue.current.version),
                 status: queue.current.status,
+                eta: songControl?.eta_by_public_id?.get(queue.current.public_id) || null,
                 ...publicSong(queue.current)
               }
               : null,
@@ -359,9 +490,20 @@ function createLiveHomeService({
               public_id: request.public_id,
               version: Number(request.version),
               status: request.status,
+              eta: songControl?.eta_by_public_id?.get(request.public_id) || null,
               ...publicSong(request)
             })),
-            waiting_count: queue.waitingCount
+            waiting_count: queue.waitingCount,
+            revision: songControl?.revision ?? 0
+          },
+          eta: {
+            paused: songControl?.eta_paused ?? false,
+            revision: songControl?.settings_revision ?? 0
+          },
+          undo: songControl?.undo || {
+            available: false,
+            expected_revision: 0,
+            seconds_remaining: 0
           },
           activity: {
             enabled: parseBoolean(settings.get(SETTING_KEYS.activityEnabled), false),

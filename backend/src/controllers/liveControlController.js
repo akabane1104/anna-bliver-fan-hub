@@ -6,11 +6,15 @@ const {
   historyQuerySchema,
   manualRequestSchema,
   matchRequestSchema,
+  etaPauseSchema,
   positiveIdParamSchema,
   publicIdParamSchema,
   reorderSchema,
   requestTransitionSchema,
   sessionTransitionSchema,
+  songPolicySchema,
+  songRequestSettingsSchema,
+  undoSchema,
   targetQuerySchema
 } = require('../schemas/songRequestSchemas');
 const { liveEventAdminQuerySchema } = require('../schemas/liveAdminSchemas');
@@ -239,6 +243,84 @@ function createLiveControlController({
       }
     },
 
+    async getSongRequestSettings(req, res) {
+      try {
+        return res.json({ settings: await requestService.getPolicySettings() });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async updateSongRequestSettings(req, res) {
+      try {
+        const input = parseOrThrow(songRequestSettingsSchema, req.body);
+        return res.json({
+          status: 'accepted',
+          settings: await requestService.updatePolicySettings(input, req.userId)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async setEtaPaused(req, res) {
+      try {
+        const input = parseOrThrow(etaPauseSchema, req.body);
+        return res.json({
+          status: 'accepted',
+          settings: await requestService.setEtaPaused(
+            input.paused,
+            input.expected_revision,
+            req.userId
+          )
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async undoLastSongRequestAction(req, res) {
+      try {
+        const input = parseOrThrow(undoSchema, req.body);
+        return res.json(await requestService.undoLatest(
+          input.expected_revision,
+          req.userId
+        ));
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async getSongPolicy(req, res) {
+      try {
+        const songId = parseOrThrow(
+          positiveIdParamSchema,
+          req.params,
+          'invalid_song_id'
+        ).id;
+        return res.json({ policy: await requestService.getSongPolicy(songId) });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async setSongPolicy(req, res) {
+      try {
+        const songId = parseOrThrow(
+          positiveIdParamSchema,
+          req.params,
+          'invalid_song_id'
+        ).id;
+        const input = parseOrThrow(songPolicySchema, req.body);
+        return res.json({
+          status: 'accepted',
+          policy: await requestService.setSongPolicy(songId, input, req.userId)
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
     async assignRequest(req, res) {
       try {
         const input = parseOrThrow(assignRequestSchema, req.body);
@@ -285,6 +367,7 @@ function createLiveControlController({
     skipRequest: transitionRequest('skipped'),
     failRequest: transitionRequest('failed'),
     requeueRequest: transitionRequest('queued'),
+    restoreSkippedRequest: transitionRequest('queued'),
 
     async setFulfillment(req, res) {
       try {

@@ -72,6 +72,7 @@ describe('Navbar live administration menu', () => {
   test('unauthorized users never see the live administration links', async () => {
     mockPermissionService.getMyPermissions.mockResolvedValue({ permissions: [] });
     await renderNavbar();
+    expect(container.querySelector('a[href="/song-requests"]')?.textContent).toBe('点歌中心');
     expect(container.textContent).not.toContain('直播管理');
     expect(container.querySelector('a[href="/admin/live-events"]')).toBeNull();
     expect(container.querySelector('a[href="/admin/live-control"]')).toBeNull();

@@ -5,26 +5,93 @@ import { InlineAlert, useFeedback } from '../components/FeedbackProvider';
 import { songRequestService } from '../services';
 import {
   createRequestCoordinator,
+  formatEtaRange,
   getRequestDisplayTitle,
   isReorderable,
+  normalizeAvailability,
+  normalizeRequestStatus,
   requestErrorMessage,
+  REQUEST_REASON_LABELS,
   REQUEST_SOURCE_LABELS,
   REQUEST_STATUS_LABELS,
   splitCurrentQueue
 } from '../utils/songRequestUi';
 
 const HISTORY_STATUSES = [
-  'observed',
-  'needs_match',
+  'pending_review',
   'queued',
-  'active',
+  'singing',
   'completed',
-  'rejected',
-  'cancelled',
   'skipped',
-  'failed'
+  'rejected',
+  'withdrawn'
 ];
 const HISTORY_SOURCES = ['website', 'manual', 'bilibili_danmaku', 'simulation', 'replay'];
+const ACTION_REASON_CODES = [
+  'manual_rejection',
+  'manual_skip',
+  'technical_issue',
+  'singer_unavailable',
+  'other'
+];
+const EMPTY_REASON = Object.freeze({
+  reasonCode: 'other',
+  publicReason: '',
+  internalNote: ''
+});
+const EMPTY_POLICY = Object.freeze({
+  blocked: false,
+  publicReason: '',
+  internalNote: '',
+  expiresAt: '',
+  specialEventTagId: '',
+  durationOverrideSeconds: '',
+  expectedVersion: 0
+});
+
+function defaultReasonForAction(action) {
+  if (action === 'skip') return 'manual_skip';
+  if (action === 'reject') return 'manual_rejection';
+  return 'other';
+}
+
+function reasonForAction(action, draft = EMPTY_REASON) {
+  return {
+    reasonCode: draft.reasonCode || defaultReasonForAction(action),
+    publicReason: draft.publicReason?.trim() || '',
+    internalNote: draft.internalNote?.trim() || ''
+  };
+}
+
+function RequestReasonEditor({ request, value, onChange }) {
+  return (
+    <div className="song-control-reason-editor" aria-label={`处理原因：${getRequestDisplayTitle(request)}`}>
+      <select
+        value={value.reasonCode}
+        onChange={(event) => onChange({ ...value, reasonCode: event.target.value })}
+        aria-label={`选择 ${getRequestDisplayTitle(request)} 的处理原因`}
+      >
+        {ACTION_REASON_CODES.map((code) => (
+          <option key={code} value={code}>{REQUEST_REASON_LABELS[code]}</option>
+        ))}
+      </select>
+      <input
+        value={value.publicReason}
+        maxLength="200"
+        placeholder="给观众看的补充说明"
+        onChange={(event) => onChange({ ...value, publicReason: event.target.value })}
+        aria-label={`公开说明：${getRequestDisplayTitle(request)}`}
+      />
+      <input
+        value={value.internalNote}
+        maxLength="500"
+        placeholder="内部备注，不对外显示"
+        onChange={(event) => onChange({ ...value, internalNote: event.target.value })}
+        aria-label={`内部备注：${getRequestDisplayTitle(request)}`}
+      />
+    </div>
+  );
+}
 
 function RequestSummary({ request, emptyText }) {
   if (!request) return <span className="song-control-empty-inline">{emptyText}</span>;
@@ -33,6 +100,7 @@ function RequestSummary({ request, emptyText }) {
       <strong>{getRequestDisplayTitle(request)}</strong>
       <span>{request.matched_song?.artist || '待确认歌曲'}</span>
       <small>{request.requester_display_name || '未公开点歌者'}</small>
+      <small>{formatEtaRange(request.eta)}</small>
     </div>
   );
 }
@@ -56,6 +124,14 @@ function SongRequestControl() {
   const [resourceErrors, setResourceErrors] = useState({});
   const [initialLoading, setInitialLoading] = useState(true);
   const [manualMatchSongs, setManualMatchSongs] = useState({});
+  const [saveAliasByRequest, setSaveAliasByRequest] = useState({});
+  const [reasonDrafts, setReasonDrafts] = useState({});
+  const [policyDrafts, setPolicyDrafts] = useState({});
+  const [managedSongId, setManagedSongId] = useState(null);
+  const [songAliases, setSongAliases] = useState({});
+  const [aliasDrafts, setAliasDrafts] = useState({});
+  const [draggedRequestId, setDraggedRequestId] = useState('');
+  const [queueSettings, setQueueSettings] = useState(null);
   const operationLocks = useRef(new Set());
   const requestCoordinator = useRef(null);
   if (!requestCoordinator.current) {
@@ -66,6 +142,7 @@ function SongRequestControl() {
     || resourceErrors.queue
     || resourceErrors.history
     || resourceErrors.catalog
+    || resourceErrors.settings
     || ''
   );
 
@@ -155,6 +232,18 @@ function SongRequestControl() {
     }
   }, [commitResourceError, historyFilters]);
 
+  const loadSettings = useCallback(async () => {
+    const token = requestCoordinator.current.begin('settings');
+    try {
+      const result = await songRequestService.getAdminSettings();
+      if (!requestCoordinator.current.isCurrent(token)) return;
+      setQueueSettings(result.settings || result);
+      commitResourceError(token, '');
+    } catch (nextError) {
+      commitResourceError(token, requestErrorMessage(nextError, '加载点歌设置'));
+    }
+  }, [commitResourceError]);
+
   useEffect(() => {
     requestCoordinator.current.activate();
     return () => {
@@ -192,6 +281,10 @@ function SongRequestControl() {
   }, [loadHistory]);
 
   useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
+
+  useEffect(() => {
     loadQueue();
     const timer = window.setInterval(() => {
       if (document.visibilityState === 'visible') loadQueue();
@@ -207,8 +300,8 @@ function SongRequestControl() {
   }, [loadQueue]);
 
   const refreshAll = useCallback(async () => {
-    await Promise.all([loadSessions(), loadQueue(), loadHistory()]);
-  }, [loadHistory, loadQueue, loadSessions]);
+    await Promise.all([loadSessions(), loadQueue(), loadHistory(), loadSettings()]);
+  }, [loadHistory, loadQueue, loadSessions, loadSettings]);
 
   const runAction = async (key, action) => {
     if (operationLocks.current.has(key)) return { status: 'duplicate_ignored' };
@@ -261,10 +354,32 @@ function SongRequestControl() {
     });
   };
 
-  const transitionRequest = (request, action) => runAction(
+  const transitionRequest = (request, action, details = null) => runAction(
     `request:${request.public_id}`,
     async () => {
-      await songRequestService.transitionRequest(request.public_id, action, request.version);
+      const draft = reasonDrafts[request.public_id] || {
+        ...EMPTY_REASON,
+        reasonCode: defaultReasonForAction(action)
+      };
+      const options = details || (
+        ['skip', 'reject'].includes(action)
+          ? reasonForAction(action, draft)
+          : null
+      );
+      if (options) {
+        await songRequestService.transitionRequest(
+          request.public_id,
+          action,
+          request.version,
+          options
+        );
+      } else {
+        await songRequestService.transitionRequest(
+          request.public_id,
+          action,
+          request.version
+        );
+      }
       toast('队列已更新', { type: 'success' });
     }
   );
@@ -282,14 +397,25 @@ function SongRequestControl() {
   );
 
   const removeRequest = async (request) => {
+    const status = normalizeRequestStatus(request.status);
+    const action = status === 'pending_review' ? 'reject' : 'cancel';
     const accepted = await confirm({
       title: '移除等待歌曲',
       message: `确定移除《${getRequestDisplayTitle(request)}》吗？`,
-      detail: '操作会写入点歌历史，且不能从终态恢复。',
+      detail: status === 'pending_review'
+        ? '待确认请求会被拒绝并写入点歌历史。'
+        : '已排队请求会被撤回并写入点歌历史。',
       confirmText: '确认移除',
       variant: 'danger'
     });
-    if (accepted) transitionRequest(request, 'cancel');
+    if (accepted) transitionRequest(
+      request,
+      action,
+      reasonForAction(action, reasonDrafts[request.public_id] || {
+        ...EMPTY_REASON,
+        reasonCode: status === 'pending_review' ? 'manual_rejection' : 'other'
+      })
+    );
   };
 
   const reorderable = useMemo(
@@ -308,20 +434,38 @@ function SongRequestControl() {
   const sessionOperationKey = selectedSession ? `session:${selectedSession.public_id}` : '';
   const createOperationKey = `target:${sessionForm.site_id}:${sessionForm.room_id}`;
 
-  const moveRequest = (request, direction) => {
-    const index = reorderable.findIndex(({ public_id }) => public_id === request.public_id);
-    const targetIndex = index + direction;
-    if (index < 0 || targetIndex < 0 || targetIndex >= reorderable.length) return;
-    const next = [...reorderable];
-    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
-    runAction(`reorder:${queueData.session.public_id}`, async () => {
+  const reorderRequests = (next) => runAction(
+    `reorder:${queueData.session.public_id}`,
+    async () => {
       await songRequestService.reorder(
         queueData.session.public_id,
         queueData.session.version,
         next.map(({ public_id }) => public_id)
       );
       toast('等待顺序已更新', { type: 'success' });
-    });
+    }
+  );
+
+  const moveRequest = (request, direction) => {
+    const index = reorderable.findIndex(({ public_id }) => public_id === request.public_id);
+    const targetIndex = index + direction;
+    if (index < 0 || targetIndex < 0 || targetIndex >= reorderable.length) return;
+    const next = [...reorderable];
+    [next[index], next[targetIndex]] = [next[targetIndex], next[index]];
+    reorderRequests(next);
+  };
+
+  const moveRequestToPosition = (request, position) => {
+    const sourceIndex = reorderable.findIndex(({ public_id }) => public_id === request.public_id);
+    const targetIndex = Math.min(
+      reorderable.length - 1,
+      Math.max(0, Number(position) - 1)
+    );
+    if (sourceIndex < 0 || sourceIndex === targetIndex) return;
+    const next = [...reorderable];
+    const [moved] = next.splice(sourceIndex, 1);
+    next.splice(targetIndex, 0, moved);
+    reorderRequests(next);
   };
 
   const addManualSong = (song) => runAction(`manual:${queueData.session.public_id}:${song.id}`, async () => {
@@ -340,8 +484,140 @@ function SongRequestControl() {
     const songId = Number(manualMatchSongs[request.public_id]);
     if (!songId) return;
     runAction(`request:${request.public_id}`, async () => {
-      await songRequestService.matchRequest(request.public_id, request.version, songId);
+      await songRequestService.matchRequest(
+        request.public_id,
+        request.version,
+        songId,
+        { saveAlias: Boolean(saveAliasByRequest[request.public_id]) }
+      );
       toast('歌曲匹配已确认', { type: 'success' });
+    });
+  };
+
+  const updateReasonDraft = (publicId, value) => {
+    setReasonDrafts((current) => ({ ...current, [publicId]: value }));
+  };
+
+  const updatePolicyDraft = (songId, value) => {
+    setPolicyDrafts((current) => ({ ...current, [songId]: value }));
+  };
+
+  const policyDraftFromResponse = (policy = null) => ({
+    blocked: Boolean(policy?.blocked),
+    publicReason: policy?.public_reason || '',
+    internalNote: policy?.internal_note || '',
+    expiresAt: policy?.expires_at
+      ? new Date(policy.expires_at).toISOString().slice(0, 16)
+      : '',
+    specialEventTagId: policy?.special_event_tag_id ?? '',
+    durationOverrideSeconds: policy?.duration_override_seconds ?? '',
+    expectedVersion: Number(policy?.version || 0)
+  });
+
+  const openSongManagement = (song) => runAction(`manage-song:${song.id}`, async () => {
+    const [policyResult, aliasResult] = await Promise.all([
+      songRequestService.getSongPolicy(song.id),
+      songRequestService.getSongAliases(song.id)
+    ]);
+    setManagedSongId(song.id);
+    updatePolicyDraft(song.id, policyDraftFromResponse(policyResult.policy));
+    setSongAliases((current) => ({
+      ...current,
+      [song.id]: aliasResult.aliases || []
+    }));
+  });
+
+  const setSongPolicy = (song, blocked) => {
+    const draft = policyDrafts[song.id] || EMPTY_POLICY;
+    return runAction(`policy:${song.id}`, async () => {
+      const result = await songRequestService.setSongPolicy(song.id, {
+        blocked,
+        publicReason: draft.publicReason,
+        internalNote: draft.internalNote,
+        expiresAt: draft.expiresAt ? new Date(draft.expiresAt).toISOString() : null,
+        specialEventTagId: draft.specialEventTagId === ''
+          ? null
+          : Number(draft.specialEventTagId),
+        durationOverrideSeconds: draft.durationOverrideSeconds === ''
+          ? null
+          : Number(draft.durationOverrideSeconds),
+        expectedVersion: draft.expectedVersion
+      });
+      updatePolicyDraft(song.id, policyDraftFromResponse(result.policy));
+      toast(blocked ? '歌曲已暂时封锁' : '歌曲封锁已解除', { type: 'success' });
+    });
+  };
+
+  const addAlias = (song) => {
+    const alias = (aliasDrafts[song.id] || '').trim();
+    if (!alias) return;
+    return runAction(`alias-add:${song.id}`, async () => {
+      await songRequestService.addSongAlias(song.id, alias);
+      const result = await songRequestService.getSongAliases(song.id);
+      setSongAliases((current) => ({ ...current, [song.id]: result.aliases || [] }));
+      setAliasDrafts((current) => ({ ...current, [song.id]: '' }));
+      toast('歌曲别名已加入', { type: 'success' });
+    });
+  };
+
+  const deleteAlias = (song, alias) => runAction(`alias-delete:${alias.id}`, async () => {
+    await songRequestService.deleteSongAlias(alias.id);
+    setSongAliases((current) => ({
+      ...current,
+      [song.id]: (current[song.id] || []).filter(({ id }) => id !== alias.id)
+    }));
+    toast('歌曲别名已删除', { type: 'success' });
+  });
+
+  const saveQueueSettings = () => runAction('queue-settings', async () => {
+    await songRequestService.updateAdminSettings(queueSettings);
+    toast('点歌容量与时间设置已保存', { type: 'success' });
+  });
+
+  const queueSettingsValid = useMemo(() => {
+    if (!queueSettings) return false;
+    const queueLimit = Number(queueSettings.queue_limit);
+    const reopenThreshold = Number(queueSettings.reopen_threshold);
+    const maxEtaMinutes = Number(queueSettings.max_eta_minutes);
+    const reopenEtaMinutes = Number(queueSettings.reopen_eta_minutes);
+    const defaultSongSeconds = Number(queueSettings.default_song_seconds);
+    const bufferSeconds = Number(queueSettings.buffer_seconds);
+    const cooldownMinutes = Number(queueSettings.cooldown_minutes);
+    return (
+      Number.isFinite(queueLimit)
+      && queueLimit >= 1
+      && Number.isFinite(reopenThreshold)
+      && reopenThreshold >= 0
+      && reopenThreshold < queueLimit
+      && Number.isFinite(maxEtaMinutes)
+      && maxEtaMinutes >= 1
+      && Number.isFinite(reopenEtaMinutes)
+      && reopenEtaMinutes >= 0
+      && reopenEtaMinutes < maxEtaMinutes
+      && Number.isFinite(defaultSongSeconds)
+      && defaultSongSeconds >= 30
+      && Number.isFinite(bufferSeconds)
+      && bufferSeconds >= 0
+      && Number.isFinite(cooldownMinutes)
+      && cooldownMinutes >= 0
+    );
+  }, [queueSettings]);
+
+  const toggleEtaPaused = () => runAction('eta-paused', async () => {
+    await songRequestService.setEtaPaused(
+      !queueSettings?.eta_paused,
+      queueSettings?.revision
+    );
+    toast(queueSettings?.eta_paused ? 'ETA 已恢复' : 'ETA 已暂停', { type: 'success' });
+  });
+
+  const undoLastAction = () => {
+    const undo = queueData?.undo || {};
+    return runAction('undo', async () => {
+      await songRequestService.undoLastAction(
+        undo.expected_revision ?? queueData?.revision
+      );
+      toast('最近一次队列操作已撤销', { type: 'success' });
     });
   };
 
@@ -478,7 +754,20 @@ function SongRequestControl() {
                 <p className="section-kicker">实时概览</p>
                 <h2 id="queue-overview-title">统一点歌队列</h2>
               </div>
-              <span className="song-control-waiting-count">等待 {publicQueue.waitingCount} 首</span>
+              <div className="song-control-queue-meta">
+                <span className="song-control-waiting-count">等待 {publicQueue.waitingCount} 首</span>
+                <span>Revision {queueData?.revision ?? '-'}</span>
+                {queueData?.undo?.available && (
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={pending.has('undo')}
+                    onClick={undoLastAction}
+                  >
+                    撤销最近操作（{Number(queueData.undo.seconds_remaining ?? 30)} 秒）
+                  </button>
+                )}
+              </div>
             </div>
             <div className="song-control-now-grid">
               <div><span>目前处理</span><RequestSummary request={publicQueue.active} emptyText="尚未开始歌曲" /></div>
@@ -488,6 +777,14 @@ function SongRequestControl() {
             {publicQueue.active && (
               <div className="song-control-active-row">
                 <RequestSummary request={publicQueue.active} />
+                <RequestReasonEditor
+                  request={publicQueue.active}
+                  value={reasonDrafts[publicQueue.active.public_id] || {
+                    ...EMPTY_REASON,
+                    reasonCode: 'manual_skip'
+                  }}
+                  onChange={(value) => updateReasonDraft(publicQueue.active.public_id, value)}
+                />
                 <div className="song-request-fulfillment" aria-label="完成方式">
                   <button
                     type="button"
@@ -528,18 +825,45 @@ function SongRequestControl() {
             ) : (
               <ol className="song-control-queue-list">
                 {reorderable.map((request, index) => (
-                  <li key={request.public_id}>
-                    <span className="queue-position">{request.queue_order || index + 1}</span>
+                  <li
+                    key={request.public_id}
+                    draggable={!pending.has(`reorder:${queueData.session.public_id}`)}
+                    aria-grabbed={draggedRequestId === request.public_id}
+                    onDragStart={() => setDraggedRequestId(request.public_id)}
+                    onDragEnd={() => setDraggedRequestId('')}
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const dragged = reorderable.find(
+                        ({ public_id }) => public_id === draggedRequestId
+                      );
+                      if (dragged) {
+                        moveRequestToPosition(dragged, index + 1);
+                      }
+                      setDraggedRequestId('');
+                    }}
+                  >
+                    <label className="queue-position">
+                      <span className="sr-only">队列位置</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max={reorderable.length}
+                        value={index + 1}
+                        aria-label={`调整 ${getRequestDisplayTitle(request)} 的队列位置`}
+                        onChange={(event) => moveRequestToPosition(request, event.target.value)}
+                      />
+                    </label>
                     <span className="queue-song-copy">
                       <strong>{getRequestDisplayTitle(request)}</strong>
                       <small>
                         {request.matched_song?.artist || '待人工匹配'} · {request.requester_display_name || '未公开点歌者'} · {REQUEST_SOURCE_LABELS[request.source] || request.source}
                       </small>
                     </span>
-                    <span className={`request-status request-status-${request.status}`}>
-                      {REQUEST_STATUS_LABELS[request.status]}
+                    <span className={`request-status request-status-${normalizeRequestStatus(request.status)}`}>
+                      {REQUEST_STATUS_LABELS[normalizeRequestStatus(request.status)]}
                     </span>
-                    {request.status === 'needs_match' && (
+                    {normalizeRequestStatus(request.status) === 'pending_review' && (
                       <div className="song-control-match">
                         <select
                           aria-label={`为 ${request.requested_title} 选择歌曲`}
@@ -552,14 +876,45 @@ function SongRequestControl() {
                           <option value="">选择匹配歌曲</option>
                           {catalog.songs.map((song) => <option key={song.id} value={song.id}>{song.title}</option>)}
                         </select>
+                        <label className="song-control-save-alias">
+                          <input
+                            type="checkbox"
+                            checked={Boolean(saveAliasByRequest[request.public_id])}
+                            onChange={(event) => setSaveAliasByRequest((current) => ({
+                              ...current,
+                              [request.public_id]: event.target.checked
+                            }))}
+                          />
+                          保存原始输入为别名
+                        </label>
                         <button type="button" onClick={() => matchRequest(request)}>确认</button>
+                        {(request.match_method || request.match_confidence !== undefined) && (
+                          <small>
+                            建议：{request.match_method || 'unknown'}
+                            {request.match_confidence !== undefined
+                              ? ` · ${Math.round(Number(request.match_confidence) * 100)}%`
+                              : ''}
+                          </small>
+                        )}
                       </div>
                     )}
+                    <RequestReasonEditor
+                      request={request}
+                      value={reasonDrafts[request.public_id] || {
+                        ...EMPTY_REASON,
+                        reasonCode: 'manual_rejection'
+                      }}
+                      onChange={(value) => updateReasonDraft(request.public_id, value)}
+                    />
                     <div className="song-control-row-actions">
                       <button type="button" aria-label={`上移 ${getRequestDisplayTitle(request)}`} disabled={index === 0 || pending.has(`reorder:${queueData.session.public_id}`)} onClick={() => moveRequest(request, -1)}>上移</button>
                       <button type="button" aria-label={`下移 ${getRequestDisplayTitle(request)}`} disabled={index === reorderable.length - 1 || pending.has(`reorder:${queueData.session.public_id}`)} onClick={() => moveRequest(request, 1)}>下移</button>
-                      {request.status === 'queued' && <button type="button" onClick={() => transitionRequest(request, 'activate')}>设为当前</button>}
-                      <button type="button" className="danger-text" onClick={() => removeRequest(request)}>移除</button>
+                      {normalizeRequestStatus(request.status) === 'queued' && (
+                        <button type="button" onClick={() => transitionRequest(request, 'activate')}>设为当前</button>
+                      )}
+                      <button type="button" className="danger-text" onClick={() => removeRequest(request)}>
+                        {normalizeRequestStatus(request.status) === 'pending_review' ? '拒绝' : '移除'}
+                      </button>
                     </div>
                   </li>
                 ))}
@@ -584,22 +939,237 @@ function SongRequestControl() {
           />
         </div>
         <div className="song-control-catalog">
-          {catalog.songs.map((song) => (
-            <div key={song.id}>
-              <span><strong>{song.title}</strong><small>{song.artist}</small></span>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                disabled={!queueData?.session || pending.has(`manual:${queueData?.session?.public_id}:${song.id}`)}
-                onClick={() => addManualSong(song)}
-              >
-                {pending.has(`manual:${queueData?.session?.public_id}:${song.id}`) ? '添加中...' : '加入队列'}
-              </button>
-            </div>
-          ))}
+          {catalog.songs.map((song) => {
+            const availability = normalizeAvailability(song);
+            const policy = policyDrafts[song.id] || EMPTY_POLICY;
+            return (
+              <div key={song.id}>
+                <span>
+                  <strong>{song.title}</strong>
+                  <small>{song.artist}</small>
+                  {availability.temporarilyBlocked && <small>暂时封锁中</small>}
+                </span>
+                <div className="song-control-row-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    disabled={!queueData?.session || pending.has(`manual:${queueData?.session?.public_id}:${song.id}`)}
+                    onClick={() => addManualSong(song)}
+                  >
+                    {pending.has(`manual:${queueData?.session?.public_id}:${song.id}`) ? '添加中...' : '加入队列'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={pending.has(`manage-song:${song.id}`)}
+                    onClick={() => (
+                      managedSongId === song.id
+                        ? setManagedSongId(null)
+                        : openSongManagement(song)
+                    )}
+                  >
+                    {managedSongId === song.id ? '收起管理' : '歌曲规则与别名'}
+                  </button>
+                </div>
+                {managedSongId === song.id && (
+                  <div className="song-policy-editor">
+                    <div className="song-policy-fields">
+                      <input
+                        value={policy.publicReason}
+                        maxLength="200"
+                        placeholder="公开封锁原因"
+                        onChange={(event) => updatePolicyDraft(song.id, {
+                          ...policy,
+                          publicReason: event.target.value
+                        })}
+                        aria-label={`《${song.title}》公开封锁原因`}
+                      />
+                      <input
+                        value={policy.internalNote}
+                        maxLength="500"
+                        placeholder="内部备注"
+                        onChange={(event) => updatePolicyDraft(song.id, {
+                          ...policy,
+                          internalNote: event.target.value
+                        })}
+                        aria-label={`《${song.title}》封锁内部备注`}
+                      />
+                      <label>
+                        <span>封锁到期时间</span>
+                        <input
+                          type="datetime-local"
+                          value={policy.expiresAt}
+                          onChange={(event) => updatePolicyDraft(song.id, {
+                            ...policy,
+                            expiresAt: event.target.value
+                          })}
+                          aria-label={`《${song.title}》封锁到期时间`}
+                        />
+                      </label>
+                      <label>
+                        <span>限定活动标签 ID</span>
+                        <input
+                          type="number"
+                          min="1"
+                          value={policy.specialEventTagId}
+                          onChange={(event) => updatePolicyDraft(song.id, {
+                            ...policy,
+                            specialEventTagId: event.target.value
+                          })}
+                        />
+                      </label>
+                      <label>
+                        <span>预计时长（秒）</span>
+                        <input
+                          type="number"
+                          min="30"
+                          max="7200"
+                          value={policy.durationOverrideSeconds}
+                          onChange={(event) => updatePolicyDraft(song.id, {
+                            ...policy,
+                            durationOverrideSeconds: event.target.value
+                          })}
+                        />
+                      </label>
+                    </div>
+                    <div className="song-control-row-actions">
+                      {policy.blocked ? (
+                        <button type="button" onClick={() => setSongPolicy(song, false)}>
+                          解除封锁并保存规则
+                        </button>
+                      ) : (
+                        <button
+                          type="button"
+                          disabled={!policy.publicReason.trim()}
+                          onClick={() => setSongPolicy(song, true)}
+                        >
+                          暂时封锁并保存规则
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setSongPolicy(song, policy.blocked)}
+                      >
+                        保存活动与时长
+                      </button>
+                    </div>
+                    <div className="song-alias-editor">
+                      <strong>已确认别名</strong>
+                      {(songAliases[song.id] || []).length > 0 ? (
+                        <ul>
+                          {(songAliases[song.id] || []).map((alias) => (
+                            <li key={alias.id}>
+                              <span>{alias.alias}</span>
+                              <button
+                                type="button"
+                                aria-label={`删除别名 ${alias.alias}`}
+                                onClick={() => deleteAlias(song, alias)}
+                              >
+                                删除
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : <span>尚无别名</span>}
+                      <div>
+                        <input
+                          value={aliasDrafts[song.id] || ''}
+                          maxLength="200"
+                          placeholder="新增别名"
+                          aria-label={`为《${song.title}》新增别名`}
+                          onChange={(event) => setAliasDrafts((current) => ({
+                            ...current,
+                            [song.id]: event.target.value
+                          }))}
+                        />
+                        <button
+                          type="button"
+                          disabled={!(aliasDrafts[song.id] || '').trim()}
+                          onClick={() => addAlias(song)}
+                        >
+                          加入别名
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
           {catalog.songs.length === 0 && <div className="song-request-empty compact">没有找到歌曲</div>}
         </div>
       </section>
+
+      {queueSettings && (
+        <section className="song-control-section" aria-labelledby="queue-settings-title">
+          <div className="song-request-section-heading">
+            <div>
+              <p className="section-kicker">容量与时间</p>
+              <h2 id="queue-settings-title">点歌 ETA 设置</h2>
+            </div>
+            <button type="button" className="btn btn-secondary" onClick={toggleEtaPaused}>
+              {queueSettings.eta_paused ? '恢复 ETA' : '暂停 ETA'}
+            </button>
+          </div>
+          <div className="song-queue-settings-grid">
+            {[
+              ['cooldown_minutes', '完成后冷却（分钟）', 0],
+              ['queue_limit', '自动关闭容量', 1],
+              ['reopen_threshold', '自动重开容量', 0],
+              ['max_eta_minutes', '自动关闭 ETA（分钟）', 1],
+              ['reopen_eta_minutes', '自动重开 ETA（分钟）', 0],
+              ['default_song_seconds', '默认歌曲秒数', 30],
+              ['buffer_seconds', '歌曲间缓冲秒数', 0]
+            ].map(([field, label, min]) => (
+              <label key={field}>
+                <span>{label}</span>
+                <input
+                  type="number"
+                  min={min}
+                  value={queueSettings[field] ?? ''}
+                  onChange={(event) => setQueueSettings((current) => ({
+                    ...current,
+                    [field]: event.target.value === '' ? '' : Number(event.target.value)
+                  }))}
+                />
+              </label>
+            ))}
+            <label>
+              <span>当前活动标签 ID</span>
+              <input
+                type="number"
+                min="1"
+                value={queueSettings.active_event_tag_id ?? ''}
+                onChange={(event) => setQueueSettings((current) => ({
+                  ...current,
+                  active_event_tag_id: event.target.value === ''
+                    ? null
+                    : Number(event.target.value)
+                }))}
+              />
+            </label>
+            <label className="song-control-checkbox-setting">
+              <input
+                type="checkbox"
+                checked={Boolean(queueSettings.block_repeat_today)}
+                onChange={(event) => setQueueSettings((current) => ({
+                  ...current,
+                  block_repeat_today: event.target.checked
+                }))}
+              />
+              <span>今天唱过的歌曲不可重复点</span>
+            </label>
+          </div>
+          <button
+            type="button"
+            className="btn btn-primary"
+            disabled={pending.has('queue-settings') || !queueSettingsValid}
+            onClick={saveQueueSettings}
+          >
+            保存点歌规则与 ETA
+          </button>
+          <small>设置版本 {queueSettings.revision}</small>
+        </section>
+      )}
 
       <section className="song-control-section" aria-labelledby="song-history-title">
         <div className="song-request-section-heading">
@@ -652,9 +1222,18 @@ function SongRequestControl() {
                 </div>
                 <span>{request.requester_display_name || '未公开点歌者'}</span>
                 <span>{REQUEST_SOURCE_LABELS[request.source] || request.source}</span>
-                <span>{REQUEST_STATUS_LABELS[request.status] || request.status}</span>
+                <span>{REQUEST_STATUS_LABELS[normalizeRequestStatus(request.status)] || request.status}</span>
                 <time dateTime={request.requested_at}>{new Date(request.requested_at).toLocaleString('zh-CN')}</time>
                 <small>{request.last_actor_display_name ? `操作人：${request.last_actor_display_name}` : '系统记录'}</small>
+                {normalizeRequestStatus(request.status) === 'skipped' && (
+                  <button
+                    type="button"
+                    disabled={pending.has(`request:${request.public_id}`)}
+                    onClick={() => transitionRequest(request, 'restore')}
+                  >
+                    恢复到队列
+                  </button>
+                )}
               </article>
             ))}
           </div>

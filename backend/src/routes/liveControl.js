@@ -7,47 +7,69 @@ const asyncHandler = require('../utils/asyncHandler');
 function createLiveControlRouter({
   controller = createLiveControlController(),
   authenticate = authMiddleware,
-  authorize = requirePermission(PERMISSIONS.LIVE_CONTROL_MANAGE)
+  authorize = requirePermission(PERMISSIONS.LIVE_CONTROL_MANAGE),
+  authorizeCatalog = requirePermission(PERMISSIONS.PLAYLIST_MANAGE)
 } = {}) {
   const router = express.Router();
-  router.use(authenticate, authorize);
+  router.use(authenticate);
 
-  router.get('/home', asyncHandler(controller.liveHome));
-  router.put('/home/override', asyncHandler(controller.setLiveHomeOverride));
-  router.put('/home/song-requests', asyncHandler(controller.setSongRequestsOpen));
-  router.put('/home/activity', asyncHandler(controller.setLiveHomeActivity));
-  router.post('/home/requests/:publicId/advance', asyncHandler(controller.advanceCurrent));
-  router.get('/status', asyncHandler(controller.liveStatus));
-  router.get('/events', asyncHandler(controller.liveEvents));
-  router.post('/sessions', asyncHandler(controller.createSession));
-  router.get('/sessions/active', asyncHandler(controller.activeSessions));
-  router.get('/sessions/recoverable', asyncHandler(controller.recoverableSessions));
-  router.get('/sessions/current', asyncHandler(controller.currentSession));
-  router.post('/sessions/:publicId/open', asyncHandler(controller.openSession));
-  router.post('/sessions/:publicId/pause', asyncHandler(controller.pauseSession));
-  router.post('/sessions/:publicId/resume', asyncHandler(controller.resumeSession));
-  router.post('/sessions/:publicId/close', asyncHandler(controller.closeSession));
-  router.get('/sessions/:publicId/requests', asyncHandler(controller.sessionRequests));
-  router.put('/sessions/:publicId/reorder', asyncHandler(controller.reorder));
+  router.get('/songs/:id/aliases', authorizeCatalog, asyncHandler(controller.listAliases));
+  router.get('/songs/:id/policy', authorizeCatalog, asyncHandler(controller.getSongPolicy));
+  router.put('/songs/:id/policy', authorizeCatalog, asyncHandler(controller.setSongPolicy));
+  router.post('/songs/:id/aliases', authorizeCatalog, asyncHandler(controller.addAlias));
+  router.delete('/aliases/:id', authorizeCatalog, asyncHandler(controller.deleteAlias));
 
-  router.get('/requests/observed', asyncHandler(controller.observedRequests));
-  router.get('/history', asyncHandler(controller.history));
-  router.post('/requests', asyncHandler(controller.createManualRequest));
-  router.post('/requests/:publicId/assign', asyncHandler(controller.assignRequest));
-  router.post('/requests/:publicId/match', asyncHandler(controller.matchRequest));
-  router.post('/requests/:publicId/accept-unmatched', asyncHandler(controller.acceptUnmatched));
-  router.post('/requests/:publicId/reject', asyncHandler(controller.rejectRequest));
-  router.post('/requests/:publicId/cancel', asyncHandler(controller.cancelRequest));
-  router.post('/requests/:publicId/activate', asyncHandler(controller.activateRequest));
-  router.post('/requests/:publicId/complete', asyncHandler(controller.completeRequest));
-  router.post('/requests/:publicId/skip', asyncHandler(controller.skipRequest));
-  router.post('/requests/:publicId/fail', asyncHandler(controller.failRequest));
-  router.post('/requests/:publicId/requeue', asyncHandler(controller.requeueRequest));
-  router.post('/requests/:publicId/fulfillment', asyncHandler(controller.setFulfillment));
+  const controlRouter = express.Router();
+  controlRouter.use(authorize);
+  const authorizeAliasSave = (req, res, next) => (
+    req.body?.save_alias === true ? authorizeCatalog(req, res, next) : next()
+  );
 
-  router.get('/songs/:id/aliases', asyncHandler(controller.listAliases));
-  router.post('/songs/:id/aliases', asyncHandler(controller.addAlias));
-  router.delete('/aliases/:id', asyncHandler(controller.deleteAlias));
+  controlRouter.get('/home', asyncHandler(controller.liveHome));
+  controlRouter.put('/home/override', asyncHandler(controller.setLiveHomeOverride));
+  controlRouter.put('/home/song-requests', asyncHandler(controller.setSongRequestsOpen));
+  controlRouter.put('/home/activity', asyncHandler(controller.setLiveHomeActivity));
+  controlRouter.put('/home/eta', asyncHandler(controller.setEtaPaused));
+  controlRouter.post('/home/undo', asyncHandler(controller.undoLastSongRequestAction));
+  controlRouter.post('/home/requests/:publicId/advance', asyncHandler(controller.advanceCurrent));
+  controlRouter.get('/status', asyncHandler(controller.liveStatus));
+  controlRouter.get('/events', asyncHandler(controller.liveEvents));
+  controlRouter.post('/sessions', asyncHandler(controller.createSession));
+  controlRouter.get('/sessions/active', asyncHandler(controller.activeSessions));
+  controlRouter.get('/sessions/recoverable', asyncHandler(controller.recoverableSessions));
+  controlRouter.get('/sessions/current', asyncHandler(controller.currentSession));
+  controlRouter.post('/sessions/:publicId/open', asyncHandler(controller.openSession));
+  controlRouter.post('/sessions/:publicId/pause', asyncHandler(controller.pauseSession));
+  controlRouter.post('/sessions/:publicId/resume', asyncHandler(controller.resumeSession));
+  controlRouter.post('/sessions/:publicId/close', asyncHandler(controller.closeSession));
+  controlRouter.get('/sessions/:publicId/requests', asyncHandler(controller.sessionRequests));
+  controlRouter.put('/sessions/:publicId/reorder', asyncHandler(controller.reorder));
+
+  controlRouter.get('/requests/observed', asyncHandler(controller.observedRequests));
+  controlRouter.get('/history', asyncHandler(controller.history));
+  controlRouter.get('/song-requests/settings', asyncHandler(controller.getSongRequestSettings));
+  controlRouter.put('/song-requests/settings', asyncHandler(controller.updateSongRequestSettings));
+  controlRouter.put('/song-requests/eta', asyncHandler(controller.setEtaPaused));
+  controlRouter.post('/song-requests/undo', asyncHandler(controller.undoLastSongRequestAction));
+  controlRouter.post('/requests', asyncHandler(controller.createManualRequest));
+  controlRouter.post('/requests/:publicId/assign', asyncHandler(controller.assignRequest));
+  controlRouter.post(
+    '/requests/:publicId/match',
+    authorizeAliasSave,
+    asyncHandler(controller.matchRequest)
+  );
+  controlRouter.post('/requests/:publicId/accept-unmatched', asyncHandler(controller.acceptUnmatched));
+  controlRouter.post('/requests/:publicId/reject', asyncHandler(controller.rejectRequest));
+  controlRouter.post('/requests/:publicId/cancel', asyncHandler(controller.cancelRequest));
+  controlRouter.post('/requests/:publicId/activate', asyncHandler(controller.activateRequest));
+  controlRouter.post('/requests/:publicId/complete', asyncHandler(controller.completeRequest));
+  controlRouter.post('/requests/:publicId/skip', asyncHandler(controller.skipRequest));
+  controlRouter.post('/requests/:publicId/fail', asyncHandler(controller.failRequest));
+  controlRouter.post('/requests/:publicId/requeue', asyncHandler(controller.requeueRequest));
+  controlRouter.post('/requests/:publicId/restore', asyncHandler(controller.restoreSkippedRequest));
+  controlRouter.post('/requests/:publicId/fulfillment', asyncHandler(controller.setFulfillment));
+
+  router.use(controlRouter);
 
   return router;
 }

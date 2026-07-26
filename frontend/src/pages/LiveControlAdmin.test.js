@@ -14,7 +14,9 @@ jest.mock('../services', () => ({
     setOverride: jest.fn(),
     setSongRequestsOpen: jest.fn(),
     setActivity: jest.fn(),
-    advanceCurrent: jest.fn()
+    advanceCurrent: jest.fn(),
+    setEtaPaused: jest.fn(),
+    undoLastAction: jest.fn()
   },
   songRequestService: {
     getRecoverableSessions: jest.fn(),
@@ -50,6 +52,7 @@ const DATA = {
       listener: { state: 'connected' },
       room_id_configured: false,
       queue: {
+        revision: 18,
         current: {
           public_id: 'req-current',
           status: 'active',
@@ -65,6 +68,12 @@ const DATA = {
           artist: '下一位歌手'
         }],
         waiting_count: 1
+      },
+      eta: { paused: false, revision: 18 },
+      undo: {
+        available: true,
+        expected_revision: 18,
+        seconds_remaining: 22
       },
       activity: {
         enabled: true,
@@ -99,6 +108,8 @@ describe('LiveControlAdmin', () => {
       mockLiveAdminService.setSongRequestsOpen,
       mockLiveAdminService.setActivity,
       mockLiveAdminService.advanceCurrent,
+      mockLiveAdminService.setEtaPaused,
+      mockLiveAdminService.undoLastAction,
       mockSongRequestService.transitionRequest
     ]) {
       method.mockResolvedValue({});
@@ -226,5 +237,37 @@ describe('LiveControlAdmin', () => {
       'activate',
       6
     );
+  });
+
+  test('sends a canonical skip reason and supports ETA pause plus revision undo', async () => {
+    await render();
+    await act(async () => {
+      button('跳过').click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      button('暂停 ETA').click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    await act(async () => {
+      button('撤销（22 秒）').click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(mockLiveAdminService.advanceCurrent).toHaveBeenCalledWith(
+      'req-current',
+      {
+        expected_version: 3,
+        outcome: 'skipped',
+        activate_next: false,
+        reason_code: 'manual_skip',
+        public_reason: '',
+        internal_note: ''
+      }
+    );
+    expect(mockLiveAdminService.setEtaPaused).toHaveBeenCalledWith(true, 18);
+    expect(mockLiveAdminService.undoLastAction).toHaveBeenCalledWith(18);
   });
 });

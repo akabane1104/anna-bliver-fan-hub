@@ -131,7 +131,7 @@ test('catalog query is compared in memory and is not interpolated into SQL', asy
   }, '年輪'), true);
 });
 
-test('public request projection contains no internal identity, target, reason, or version', () => {
+test('public request projection redacts identity, target, internal reason, and version', () => {
   const output = requestForPublic({
     public_id: 'dc8ea78c-ea8a-4564-aeb5-060776f4cb9f',
     requested_title: '年轮',
@@ -148,7 +148,12 @@ test('public request projection contains no internal identity, target, reason, o
     requested_at: '2026-07-23T00:00:00.000Z'
   }, { id: 1, title: '年轮', artist: 'Synthetic Artist', duration: null });
   const serialized = JSON.stringify(output);
-  assert.doesNotMatch(serialized, /open_id|user_id|site_id|room_id|reason|version|private-/);
+  assert.doesNotMatch(
+    serialized,
+    /open_id|user_id|site_id|room_id|internal_note|version|private-/
+  );
+  assert.equal(output.reason_code, 'other');
+  assert.equal(output.public_reason, '该点歌请求暂时无法处理');
   assert.equal(output.matched_song.title, '年轮');
 });
 
@@ -257,4 +262,13 @@ test('history search is paginated and all filters remain parameterized', async (
   assert.equal(calls.some(({ sql }) => sql.includes("OR 1=1")), false);
   assert.equal(calls[1].params.at(-2), 20);
   assert.equal(calls[1].params.at(-1), 20);
+
+  calls.length = 0;
+  await createSongRequestService({ pool }).getHistory({
+    status: 'pending_review',
+    page: 1,
+    limit: 20
+  });
+  assert.deepEqual(calls[0].params, ['observed', 'needs_match']);
+  assert.match(calls[0].sql, /sr\.status IN \(\?,\?\)/);
 });

@@ -1,14 +1,43 @@
 export const REQUEST_STATUS_LABELS = Object.freeze({
-  observed: '待归属',
-  needs_match: '待确认歌曲',
+  pending_review: '待主播确认',
   queued: '等待中',
-  active: '正在处理',
+  singing: '正在唱',
   completed: '已完成',
-  rejected: '已拒绝',
-  cancelled: '已移除',
   skipped: '已跳过',
-  failed: '处理失败'
+  rejected: '已拒绝',
+  withdrawn: '已撤回'
 });
+
+export const REQUEST_REASON_LABELS = Object.freeze({
+  identity_binding_required: '请先绑定B站账号',
+  requests_closed: '目前未开放点歌',
+  queue_capacity_reached: '队列已达到容量上限',
+  user_active_limit: '你已有进行中的点歌',
+  duplicate_in_queue: '这首歌已在队列中',
+  song_cooldown: '这首歌仍在冷却时间',
+  already_sung_today: '这首歌今天已经唱过',
+  song_temporarily_blocked: '这首歌暂时不能点',
+  special_event_only: '这首歌仅限指定活动',
+  title_unclear: '歌名不够明确',
+  song_not_found: '歌曲库中找不到这首歌',
+  manual_rejection: '主播已拒绝这次点歌',
+  manual_skip: '主播已跳过这首歌',
+  technical_issue: '因技术问题暂时无法演唱',
+  singer_unavailable: '主播目前无法演唱',
+  other: '其他原因'
+});
+
+const LEGACY_STATUS_MAP = Object.freeze({
+  observed: 'pending_review',
+  needs_match: 'pending_review',
+  active: 'singing',
+  cancelled: 'withdrawn',
+  failed: 'skipped'
+});
+
+export function normalizeRequestStatus(status) {
+  return LEGACY_STATUS_MAP[status] || status || 'pending_review';
+}
 
 export const REQUEST_SOURCE_LABELS = Object.freeze({
   bilibili_danmaku: 'B站弹幕',
@@ -75,14 +104,31 @@ export function createRequestCoordinator() {
 }
 
 export function getRequestDisplayTitle(request) {
-  return request?.matched_song?.title || request?.requested_title || '未命名歌曲';
+  return (
+    request?.canonicalSong?.title
+    || request?.canonical_song?.title
+    || request?.matched_song?.title
+    || request?.requested_title
+    || request?.originalInput
+    || request?.original_input
+    || '未命名歌曲'
+  );
 }
 
 export function splitCurrentQueue(data) {
+  if (Array.isArray(data?.queue) || data?.current || data?.next) {
+    const waiting = Array.isArray(data.queue) ? data.queue : [];
+    return {
+      active: data.current || null,
+      next: data.next || waiting[0] || null,
+      waiting,
+      waitingCount: Number(data.capacityCount ?? data.capacity_count ?? waiting.length)
+    };
+  }
   const requests = Array.isArray(data?.requests) ? data.requests : [];
-  const active = requests.find(({ status }) => status === 'active') || null;
+  const active = requests.find(({ status }) => normalizeRequestStatus(status) === 'singing') || null;
   const waiting = requests
-    .filter(({ status }) => ['needs_match', 'queued'].includes(status))
+    .filter(({ status }) => ['pending_review', 'queued'].includes(normalizeRequestStatus(status)))
     .sort((left, right) => {
       const leftOrder = Number(left.queue_order ?? Number.MAX_SAFE_INTEGER);
       const rightOrder = Number(right.queue_order ?? Number.MAX_SAFE_INTEGER);
@@ -98,9 +144,10 @@ export function splitCurrentQueue(data) {
 
 export function requestErrorMessage(error, action = '操作') {
   const status = Number(error?.response?.status);
-  const code = error?.response?.data?.code;
+  const code = error?.response?.data?.reason_code || error?.response?.data?.code;
   if (status === 401) return '请先登录后再点歌。';
   if (status === 403) return '当前账号没有执行此操作的权限。';
+  if (REQUEST_REASON_LABELS[code]) return error?.response?.data?.public_reason || REQUEST_REASON_LABELS[code];
   if (status === 409) {
     if (code === 'no_open_session') return '当前还没有开放点歌，请稍后再来。';
     if (code === 'song_requests_closed') return '目前暂停接收点歌，请稍后再试。';
@@ -116,5 +163,76 @@ export function requestErrorMessage(error, action = '操作') {
 }
 
 export function isReorderable(request) {
-  return ['needs_match', 'queued'].includes(request?.status);
+  return ['pending_review', 'queued'].includes(normalizeRequestStatus(request?.status));
+}
+
+export function formatEtaRange(eta) {
+  if (!eta) return '等待估算中';
+  if (eta.paused) return '时间估算已暂停';
+  if (eta.rangeLabel || eta.range_label) return eta.rangeLabel || eta.range_label;
+  const min = Number(eta.minMinutes ?? eta.min_minutes);
+  const max = Number(eta.maxMinutes ?? eta.max_minutes);
+  if (Number.isFinite(min) && Number.isFinite(max)) {
+    if (min === max) return `约 ${min} 分钟`;
+    return `约 ${min}–${max} 分钟`;
+  }
+  return '等待估算中';
+}
+
+export function normalizeQueueItem(item = {}) {
+  return {
+    displayKey: item.displayKey || item.display_key || null,
+    position: Number(item.position ?? item.queue_order ?? 0) || null,
+    canonicalSong: item.canonicalSong || item.canonical_song || item.matched_song || null,
+    maskedDisplayName: item.maskedDisplayName || item.masked_display_name || '',
+    eta: item.eta || null,
+    status: normalizeRequestStatus(item.status),
+    isMine: Boolean(item.isMine ?? item.is_mine)
+  };
+}
+
+export function normalizeSongRequestCenter(payload = {}) {
+  const safePayload = payload || {};
+  const source = safePayload.public || safePayload.center || safePayload;
+  const legacySessionOpen = source.session?.status === 'open';
+  const queue = Array.isArray(source.queue)
+    ? source.queue.map(normalizeQueueItem)
+    : splitCurrentQueue(source).waiting.map(normalizeQueueItem);
+  return {
+    effectiveOpen: Boolean(
+      source.effectiveOpen
+      ?? source.effective_open
+      ?? source.open
+      ?? legacySessionOpen
+    ),
+    manualOpen: Boolean(source.manualOpen ?? source.manual_open ?? source.open ?? legacySessionOpen),
+    autoCapacityBlocked: Boolean(source.autoCapacityBlocked ?? source.auto_capacity_blocked),
+    closeReason: source.closeReason || source.close_reason || '',
+    capacityCount: Number(source.capacityCount ?? source.capacity_count ?? queue.length),
+    queueLimit: Number(source.queueLimit ?? source.queue_limit ?? 12),
+    reopenThreshold: Number(source.reopenThreshold ?? source.reopen_threshold ?? 8),
+    current: source.current ? normalizeQueueItem(source.current) : splitCurrentQueue(source).active,
+    next: source.next ? normalizeQueueItem(source.next) : (queue[0] || null),
+    queue,
+    todayCompleted: (source.todayCompleted || source.today_completed || []).map(normalizeQueueItem),
+    activity: source.activity || null,
+    updatedAt: source.updatedAt || source.updated_at || null,
+    etaPaused: Boolean(source.etaPaused ?? source.eta_paused)
+  };
+}
+
+export function normalizeAvailability(song = {}) {
+  const source = song.availability || {};
+  const reasonCode = source.reasonCode || source.reason_code || '';
+  return {
+    requestable: source.requestable !== false,
+    reasonCode,
+    reason: source.publicReason || source.public_reason || REQUEST_REASON_LABELS[reasonCode] || '',
+    sungToday: Boolean(source.sungToday ?? source.sung_today),
+    cooldownUntil: source.cooldownUntil || source.cooldown_until || null,
+    alreadyQueued: Boolean(source.alreadyQueued ?? source.already_queued),
+    temporarilyBlocked: Boolean(source.temporarilyBlocked ?? source.temporarily_blocked),
+    specialEventOnly: Boolean(source.specialEventOnly ?? source.special_event_only),
+    eta: source.eta || null
+  };
 }

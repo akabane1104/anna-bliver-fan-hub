@@ -79,6 +79,7 @@ function App() {
                 <Route path="/login" element={<Login />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/playlists" element={<Playlists />} />
+                <Route path="/song-requests" element={<Playlists />} />
                 <Route path="/playlists/:id" element={<PlaylistDetail />} />
                 <Route path="/marshmallows" element={<MarshmallowHome />} />
                 <Route path="/marshmallows/write" element={<MarshmallowWrite />} />

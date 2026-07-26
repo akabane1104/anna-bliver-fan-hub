@@ -24,7 +24,7 @@ test('all core fixtures pass the existing Phase 4B strict schema', () => {
   assert.equal(scenarios.reduce((count, item) => count + item.steps.length, 0), 16);
   assert.equal(
     scenarios.reduce((count, item) => count + item.expected_song_requests, 0),
-    10
+    8
   );
 
   for (const currentScenario of scenarios) {

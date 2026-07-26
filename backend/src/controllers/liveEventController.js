@@ -27,6 +27,17 @@ function auditMetadata(event) {
   };
 }
 
+function safeObservation(value) {
+  const allowedStatuses = new Set(['created', 'ignored', 'duplicate', 'updated']);
+  const status = String(value?.status || '');
+  if (!allowedStatuses.has(status)) return null;
+  const reason = String(value?.reason || '');
+  return {
+    status,
+    ...(/^[a-z][a-z0-9_]{0,49}$/.test(reason) ? { reason } : {})
+  };
+}
+
 function createLiveEventController({
   service,
   statusService = defaultLiveHomeService,
@@ -64,7 +75,12 @@ function createLiveEventController({
         const result = await service.record(event);
         status = result.status;
         if (result.status === 'accepted') {
-          return res.status(201).json({ status: 'accepted', event_id: event.event_id });
+          const observation = safeObservation(result.observation);
+          return res.status(201).json({
+            status: 'accepted',
+            event_id: event.event_id,
+            ...(observation ? { observation } : {})
+          });
         }
         if (result.status === 'duplicate') {
           return res.status(200).json({ status: 'duplicate', event_id: event.event_id });
@@ -129,4 +145,4 @@ function createLiveEventController({
   };
 }
 
-module.exports = { createLiveEventController };
+module.exports = { createLiveEventController, safeObservation };

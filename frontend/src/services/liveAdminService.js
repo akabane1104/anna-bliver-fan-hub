@@ -32,6 +32,21 @@ const liveAdminService = {
     return response.data;
   },
 
+  async undoLastAction(expectedRevision) {
+    const response = await api.post('/live-control/home/undo', {
+      expected_revision: expectedRevision
+    });
+    return response.data;
+  },
+
+  async setEtaPaused(paused, expectedRevision = null) {
+    const response = await api.put('/live-control/home/eta', {
+      paused: Boolean(paused),
+      ...(expectedRevision === null ? {} : { expected_revision: expectedRevision })
+    });
+    return response.data;
+  },
+
   async getStatus({ signal } = {}) {
     const response = await api.get('/live-control/status', { signal });
     return response.data;

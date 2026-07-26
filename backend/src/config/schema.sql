@@ -100,6 +100,7 @@ CREATE TABLE user_bilibili_bindings (
   id INT AUTO_INCREMENT PRIMARY KEY,
   user_id INT NOT NULL,
   bilibili_uid BIGINT NOT NULL,
+  bilibili_open_id VARCHAR(128) COLLATE utf8mb4_bin DEFAULT NULL,
   bilibili_uname VARCHAR(100),
   bilibili_face VARCHAR(500),
   status ENUM('verified') NOT NULL DEFAULT 'verified',
@@ -107,6 +108,7 @@ CREATE TABLE user_bilibili_bindings (
   verified_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   UNIQUE KEY unique_bound_uid (bilibili_uid),
+  UNIQUE KEY unique_bound_open_id (bilibili_open_id),
   UNIQUE KEY unique_user_uid (user_id, bilibili_uid),
   CONSTRAINT fk_binding_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -349,10 +351,53 @@ CREATE TABLE IF NOT EXISTS song_aliases (
   created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
   updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
   UNIQUE KEY unique_song_alias_equivalent (song_id, loose_candidate_key),
+  UNIQUE KEY unique_song_alias_normalized (normalized_alias),
+  UNIQUE KEY unique_song_alias_script (script_key),
   INDEX idx_song_alias_normalized (normalized_alias, song_id),
   INDEX idx_song_alias_script (script_key, song_id),
   CONSTRAINT fk_song_alias_song FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
   CONSTRAINT fk_song_alias_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS song_request_policies (
+  id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  song_id INT NOT NULL,
+  temporarily_blocked TINYINT(1) NOT NULL DEFAULT 0,
+  public_reason VARCHAR(200) DEFAULT NULL,
+  internal_note VARCHAR(500) DEFAULT NULL,
+  blocked_until DATETIME(3) DEFAULT NULL,
+  released_at DATETIME(3) DEFAULT NULL,
+  special_event_tag_id INT DEFAULT NULL,
+  duration_override_seconds INT UNSIGNED DEFAULT NULL,
+  created_by_user_id INT DEFAULT NULL,
+  updated_by_user_id INT DEFAULT NULL,
+  released_by_user_id INT DEFAULT NULL,
+  version INT UNSIGNED NOT NULL DEFAULT 0,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  UNIQUE KEY unique_song_request_policy_song (song_id),
+  INDEX idx_song_request_policy_block (temporarily_blocked, blocked_until),
+  INDEX idx_song_request_policy_event_tag (special_event_tag_id),
+  INDEX idx_song_request_policy_creator (created_by_user_id),
+  INDEX idx_song_request_policy_updater (updated_by_user_id),
+  INDEX idx_song_request_policy_releaser (released_by_user_id),
+  CONSTRAINT fk_song_request_policy_song FOREIGN KEY (song_id) REFERENCES songs(id) ON DELETE CASCADE,
+  CONSTRAINT fk_song_request_policy_event_tag FOREIGN KEY (special_event_tag_id) REFERENCES tags(id) ON DELETE SET NULL,
+  CONSTRAINT fk_song_request_policy_creator FOREIGN KEY (created_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_song_request_policy_updater FOREIGN KEY (updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL,
+  CONSTRAINT fk_song_request_policy_releaser FOREIGN KEY (released_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS song_request_details (
+  request_id BIGINT UNSIGNED PRIMARY KEY,
+  canonical_match_method VARCHAR(32) NOT NULL,
+  reason_code VARCHAR(50) DEFAULT NULL,
+  public_reason VARCHAR(200) DEFAULT NULL,
+  internal_note VARCHAR(500) DEFAULT NULL,
+  created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3),
+  INDEX idx_song_request_detail_reason (reason_code, updated_at),
+  CONSTRAINT fk_song_request_detail_request FOREIGN KEY (request_id) REFERENCES song_requests(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE prizes (
@@ -492,4 +537,17 @@ INSERT INTO settings (setting_key, setting_value) VALUES
   ('theme_surface_muted_color', '#FFF0DA'),
   ('theme_success_color', '#2E7D57'),
   ('theme_warning_color', '#9A5700'),
-  ('theme_danger_color', '#C43D4D');
+  ('theme_danger_color', '#C43D4D'),
+  ('live_home_song_requests_open', 'true'),
+  ('song_request_auto_capacity_blocked', 'false'),
+  ('song_request_cooldown_minutes', '60'),
+  ('song_request_block_repeat_today', 'false'),
+  ('song_request_queue_limit', '12'),
+  ('song_request_reopen_threshold', '8'),
+  ('song_request_eta_close_minutes', '60'),
+  ('song_request_eta_reopen_minutes', '40'),
+  ('song_request_default_duration_seconds', '240'),
+  ('song_request_buffer_seconds', '60'),
+  ('song_request_eta_paused', 'false'),
+  ('song_request_active_event_tag_id', ''),
+  ('song_request_settings_revision', '0');

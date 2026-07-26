@@ -1,4 +1,5 @@
 import React from 'react';
+import { formatEtaRange } from '../utils/songRequestUi';
 
 function SongLine({ label, song, emptyText }) {
   return (
@@ -8,6 +9,7 @@ function SongLine({ label, song, emptyText }) {
         <div>
           <strong title={song.title}>{song.title}</strong>
           <small title={song.artist || ''}>{song.artist || '演唱者待定'}</small>
+          {song.eta && <small>{formatEtaRange(song.eta)}</small>}
         </div>
       ) : (
         <em>{emptyText}</em>
@@ -40,6 +42,12 @@ function LiveHomeCard({ data, preview = false, showOffline = false }) {
       ? '重新同步中'
       : (data.mode === 'offline' ? '目前未开播' : '直播中')
   );
+  const requestsOpen = Boolean(
+    songRequests.effectiveOpen
+    ?? songRequests.effective_open
+    ?? songRequests.open
+  );
+  const closeReason = songRequests.closeReason || songRequests.close_reason;
 
   if (data.mode === 'offline') {
     return (
@@ -96,10 +104,12 @@ function LiveHomeCard({ data, preview = false, showOffline = false }) {
           />
           <div className="live-home-queue-summary">
             <span>排队 {Number(songRequests.queue_count ?? songRequests.queueCount ?? 0)} 首</span>
-            <span className={songRequests.open ? 'open' : 'closed'}>
-              点歌{songRequests.open ? '开放中' : '已关闭'}
+            <span className={requestsOpen ? 'open' : 'closed'}>
+              点歌{requestsOpen ? '开放中' : '已关闭'}
             </span>
           </div>
+          {!requestsOpen && closeReason && <p className="live-home-close-reason">{closeReason}</p>}
+          <a className="live-home-song-center-link" href="/song-requests">前往点歌中心</a>
         </div>
 
         {data.activity && (

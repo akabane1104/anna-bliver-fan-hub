@@ -66,9 +66,14 @@ function schemaSql(database, { includeTargets }) {
     )
     .replace(/USE anna_bliver_fan_hub;/, `USE \`${database}\`;`);
   if (!includeTargets) {
-    for (const tableName of MIGRATION.tables) {
+    for (const tableName of Object.keys(targetContracts)) {
       sql = sql.replace(extractCreateStatement(sql, tableName), '');
     }
+    sql = sql
+      .replace(/\s+bilibili_open_id VARCHAR\(128\)[^\r\n]*\r?\n/, '\n')
+      .replace(/\s+UNIQUE KEY unique_bound_open_id[^\r\n]*\r?\n/, '\n')
+      .replace(/\s+UNIQUE KEY unique_song_alias_normalized[^\r\n]*\r?\n/, '\n')
+      .replace(/\s+UNIQUE KEY unique_song_alias_script[^\r\n]*\r?\n/, '\n');
   }
   return sql;
 }
@@ -173,6 +178,52 @@ async function snapshotLegacy(connection, database) {
   const structures = await inspectTables(connection, database, legacyTables);
   const rows = await snapshotTableData(connection, database, legacyTables);
   return { structures, rows };
+}
+
+function assertLegacyUpgradePreserved(before, after) {
+  assert.deepEqual(after.rows, before.rows);
+  for (const tableName of legacyTables) {
+    if (tableName === 'user_bilibili_bindings') continue;
+    assert.deepEqual(after.structures[tableName], before.structures[tableName], tableName);
+  }
+
+  const beforeBindings = before.structures.user_bilibili_bindings;
+  const afterBindings = after.structures.user_bilibili_bindings;
+  assert.deepEqual(
+    afterBindings.columns.filter(({ name }) => name !== 'bilibili_open_id'),
+    beforeBindings.columns
+  );
+  assert.deepEqual(
+    afterBindings.indexes.filter(({ name }) => name !== 'unique_bound_open_id'),
+    beforeBindings.indexes
+  );
+  assert.deepEqual(afterBindings.foreign_keys, beforeBindings.foreign_keys);
+  assert.equal(afterBindings.engine, beforeBindings.engine);
+  assert.equal(afterBindings.charset, beforeBindings.charset);
+  assert.equal(afterBindings.collation, beforeBindings.collation);
+  assert.deepEqual(
+    afterBindings.columns.find(({ name }) => name === 'bilibili_open_id'),
+    {
+      name: 'bilibili_open_id',
+      type: 'varchar(128)',
+      nullable: true,
+      default: null,
+      charset: 'utf8mb4',
+      collation: 'utf8mb4_bin',
+      generated: null,
+      generation_expression: null,
+      auto_increment: false,
+      on_update: null
+    }
+  );
+  assert.deepEqual(
+    afterBindings.indexes.find(({ name }) => name === 'unique_bound_open_id'),
+    {
+      name: 'unique_bound_open_id',
+      unique: true,
+      columns: ['bilibili_open_id']
+    }
+  );
 }
 
 async function countAllTables(connection, database) {
@@ -321,7 +372,7 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
   const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'anna-r1-rollback-'));
 
   try {
-    await t.test('fresh install adopts R1 then applies R4 without business data changes', async () => {
+    await t.test('fresh install adopts additive tables and applies ordered indexes', async () => {
       await createScenarioDatabase(root, databases.fresh, true);
       const connection = await connectDatabase(databases.fresh);
       try {
@@ -333,7 +384,7 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           'live_events.idx_live_event_received'
         ]);
         assert.equal(runMigrationCli('postcheck', databases.fresh).applied, true);
-        assert.equal(await countAllTables(connection, databases.fresh), 28);
+        assert.equal(await countAllTables(connection, databases.fresh), 30);
         assert.deepEqual(await snapshotLegacy(connection, databases.fresh), before);
         freshStructures = await inspectTables(
           connection,
@@ -357,13 +408,16 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
         assert.ok(Object.values(preflight.table_states).every(({ state }) => state === 'missing'));
         const result = runMigrationCli('apply', databases.existing);
         assert.equal(result.outcome, 'applied');
-        assert.deepEqual(result.created_tables, MIGRATION.tables);
+        assert.deepEqual(result.created_tables, Object.keys(targetContracts));
         assert.deepEqual(result.created_indexes, [
-          'live_events.idx_live_event_received'
+          'live_events.idx_live_event_received',
+          'user_bilibili_bindings.unique_bound_open_id',
+          'song_aliases.unique_song_alias_normalized',
+          'song_aliases.unique_song_alias_script'
         ]);
-        assert.equal(await countAllTables(connection, databases.existing), 28);
+        assert.equal(await countAllTables(connection, databases.existing), 30);
         existingAfter = await snapshotLegacy(connection, databases.existing);
-        assert.deepEqual(existingAfter, existingBefore);
+        assertLegacyUpgradePreserved(existingBefore, existingAfter);
         upgradedStructures = await inspectTables(
           connection,
           databases.existing,
@@ -381,14 +435,14 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
         assert.equal(runMigrationCli('status', databases.existing).applied, true);
         const result = runMigrationCli('apply', databases.existing);
         assert.equal(result.outcome, 'noop');
-        assert.equal(await tableCount(connection, 'schema_migrations'), 2);
+        assert.equal(await tableCount(connection, 'schema_migrations'), 3);
         assert.deepEqual(await snapshotLegacy(connection, databases.existing), before);
         const [ledgerRows] = await connection.query(
           'SELECT version FROM schema_migrations ORDER BY version'
         );
         assert.deepEqual(
           ledgerRows.map(({ version }) => version),
-          ['202607240001', '202607240002']
+          ['202607240001', '202607240002', '202607240003']
         );
 
         const blocker = await connectDatabase(databases.existing);
@@ -518,9 +572,11 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
         assert.deepEqual(result.created_tables, [
           'song_requests',
           'song_request_history',
-          'song_aliases'
+          'song_aliases',
+          'song_request_policies',
+          'song_request_details'
         ]);
-        assert.equal(await countAllTables(connection, databases.partial), 28);
+        assert.equal(await countAllTables(connection, databases.partial), 30);
       } finally {
         await connection.end();
       }
@@ -578,7 +634,7 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
         targetDataBefore = await snapshotTableData(
           beforeConnection,
           databases.existing,
-          MIGRATION.tables
+          Object.keys(targetContracts)
         );
       } finally {
         await beforeConnection.end();
@@ -593,12 +649,16 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
       );
       const connection = await connectDatabase(databases.existing);
       try {
-        assert.deepEqual(await snapshotLegacy(connection, databases.existing), existingBefore);
+        assert.deepEqual(await snapshotLegacy(connection, databases.existing), existingAfter);
         assert.deepEqual(
-          await snapshotTableData(connection, databases.existing, MIGRATION.tables),
+          await snapshotTableData(
+            connection,
+            databases.existing,
+            Object.keys(targetContracts)
+          ),
           targetDataBefore
         );
-        assert.equal(await tableCount(connection, 'schema_migrations'), 2);
+        assert.equal(await tableCount(connection, 'schema_migrations'), 3);
       } finally {
         await connection.end();
       }

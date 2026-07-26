@@ -7,6 +7,7 @@ const express = require('express');
 const { once } = require('node:events');
 const { createLiveEventRouter, MAX_LIVE_EVENT_BODY_BYTES } = require('../src/routes/liveEvents');
 const { createLiveEventService } = require('../src/services/liveEventService');
+const { safeObservation } = require('../src/controllers/liveEventController');
 
 const FIXED_NOW = Date.parse('2026-07-23T00:00:10.000Z');
 const FIXED_TIMESTAMP = String(Math.floor(FIXED_NOW / 1000));
@@ -31,6 +32,27 @@ const COMMANDS = Object.freeze({
   room_enter: 'LIVE_OPEN_PLATFORM_LIVE_ROOM_ENTER',
   live_start: 'LIVE_OPEN_PLATFORM_LIVE_START',
   live_end: 'LIVE_OPEN_PLATFORM_LIVE_END'
+});
+
+test('accepted ingest observation exposes only structured status and reason', () => {
+  assert.deepEqual(
+    safeObservation({
+      status: 'ignored',
+      reason: 'identity_binding_required',
+      open_id: 'must-not-leak',
+      raw_request_text: 'must-not-leak',
+      secret: 'must-not-leak'
+    }),
+    {
+      status: 'ignored',
+      reason: 'identity_binding_required'
+    }
+  );
+  assert.deepEqual(
+    safeObservation({ status: 'created', reason: 'unsafe reason text' }),
+    { status: 'created' }
+  );
+  assert.equal(safeObservation({ status: 'unexpected', reason: 'other' }), null);
 });
 
 function clone(value) {

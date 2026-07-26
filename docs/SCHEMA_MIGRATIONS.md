@@ -7,12 +7,13 @@
 
 ## 安装路径
 
-`backend/src/config/schema.sql` 只用于全新空数据库。它创建 27 张业务表及初始站点
-设置；Docker 的初始化挂载也只会在全新空 MySQL volume 首次启动时执行该文件。
+`backend/src/config/schema.sql` 只用于全新空数据库。它创建 29 张业务表及初始站点
+设置；migration 另建立 1 张 `schema_migrations` 帐本表，完整状态合计 30 张。
+Docker 的初始化挂载也只会在全新空 MySQL volume 首次启动时执行该文件。
 
 全新安装在执行 `schema.sql` 后，仍应执行版本化迁移的 `apply` 与 `postcheck`。
-迁移会严格核对已经存在的五张 Phase 4B/4C 表，创建 `schema_migrations` 帐本，
-并将完全相符的结构登记为已应用，不会重建这些表。
+迁移会严格核对五张 Phase 4B/4C 表及两张 Phase 4I 延伸表，创建
+`schema_migrations` 帐本，并将完全相符的结构登记为已应用，不会重建这些表。
 
 既有 22 表安装不得再次执行完整 `schema.sql`，必须使用本文件的迁移命令。
 
@@ -22,6 +23,7 @@
 |---|---|---|
 | `202607240001` | `phase_4b_4c_live_control` | 新增 `live_events`、`live_sessions`、`song_requests`、`song_request_history`、`song_aliases` |
 | `202607240002` | `live_events_received_at_index` | 为 `live_events` 新增 `idx_live_event_received (received_at, id)` |
+| `202607240003` | `phase_4i_song_request_experience` | 新增 `song_request_policies`、`song_request_details`，并为 B站 binding 与全域歌曲别名加入 additive column/index |
 
 建立顺序为：
 
@@ -30,6 +32,8 @@
 3. `song_requests`：引用 `live_sessions.id`、既有 `users.id`、`songs.id`。
 4. `song_request_history`：引用 `song_requests.id`、既有 `users.id`。
 5. `song_aliases`：引用既有 `songs.id`、`users.id`。
+6. `song_request_policies`：引用既有 `songs.id`、`tags.id`、`users.id`。
+7. `song_request_details`：一对一引用 `song_requests.id`，保存不受 legacy enum 限制的匹配与原因资料。
 
 第一份迁移只执行 additive `CREATE TABLE IF NOT EXISTS`。执行前后都会按列顺序、型别、
 nullable、default、主键、唯一约束、索引、外键、engine、charset 与 collation
@@ -40,6 +44,12 @@ nullable、default、主键、唯一约束、索引、外键、engine、charset 
 会先检查指定索引或等价 `(received_at, id)` 非唯一索引：等价索引已存在时直接
 采用，不会建立重复索引；同名但栏位顺序不符时 fail closed。隔离 MySQL 8
 `EXPLAIN` 已验证事件排序和最近五分钟范围查询选择该索引。
+
+第三份迁移只新增两张延伸表、`user_bilibili_bindings.bilibili_open_id` 与三个
+唯一索引。每个 legacy column/index 都先通过 `information_schema` 独立检查后才
+执行，因此 DDL 中途完成一部分后可安全重跑。它不会修改 `song_requests` enum，
+也不会重建 `song_requests`；canonical fuzzy match 与 structured reason 存在
+`song_request_details`。
 
 ## Migration catalog
 
@@ -53,10 +63,9 @@ Backend 最终 Docker image 将该目录复制到 `/app/migrations`，与 Runner
 `/app/src/migrations/../../migrations` 解析出的实际位置一致。Compose 只提供
 catalog 和数据库连接环境，不会在 Backend 启动时自动执行 migration。
 
-`202607240002` 明确依赖 `202607240001`。空白／22 表安装先执行 R1，再建立 R4
-索引；已登记 R1 的安装只执行 R4。每一份 migration 只有在 DDL 与独立 postcheck
-成功后才写入自己的 ledger row。R4 失败不会把 `202607240002` 标记为已完成，
-重跑时已登记且 checksum 相同的 R1 保持 no-op。
+`202607240002` 明确依赖 `202607240001`，`202607240003` 依赖前两份。空白／22 表
+安装依次执行 R1、R4 与 Phase 4I；已登记的前置版本保持 no-op。每一份 migration
+只有在 DDL 与独立 postcheck 成功后才写入自己的 ledger row。
 
 ## 帐本与并发
 
@@ -106,7 +115,7 @@ docker compose --env-file .env run --rm --no-deps backend npm run db:migrate:pos
 
 - `status`：按顺序显示全部版本、checksum、帐本状态与资源状态。
 - `preflight`：检查 MySQL 8.0、数据库名称及 collation、22 张依赖表、必要主键、
-  advisory lock、帐本 checksum，以及五张目标表和 R4 索引是否缺少或完全相符。
+  advisory lock、帐本 checksum，以及七张目标表和全部 additive 索引是否缺少或完全相符。
 - `apply`：取得 lock，按版本执行或采用迁移，逐份严格验证后才登记成功。
 - `postcheck`：要求每份迁移均已登记，并重新验证完整结构与索引。
 
@@ -132,7 +141,7 @@ docker compose --env-file .env run --rm --no-deps backend npm run db:migrate:pos
 ### Application rollback
 
 停止使用新 API/UI 的应用版本，将 Backend 与 Frontend 回退至迁移前兼容版本。
-五张新业务表、R4 索引、`schema_migrations` 及其中数据全部保留。迁移前版本会忽略额外表，
+七张新业务表、additive 索引、`schema_migrations` 及其中数据全部保留。迁移前版本会忽略额外表，
 不需要也不得删除它们。
 
 ### Feature disable
@@ -161,7 +170,7 @@ R1 隔离 MySQL 8 测试已覆盖：
 - checksum 冲突与并发 lock fail closed。
 - 完全相容的 partial state 可继续。
 - 不相容同名表停止且不改写。
-- fresh 与 upgraded 五张表的完整 metadata 等价。
+- fresh 与 upgraded 七张表的完整 metadata 等价。
 - migration 前应用版本可在升级后 schema 上启动。
 - 未提供 Listener 变量时，旧版与当前 Backend 均可启动。
 
@@ -173,6 +182,9 @@ R4 隔离测试另覆盖：
 - R4 失败不会写入成功帐本。
 - 等价索引被采用且不会重复建立。
 - `received_at DESC, id DESC` 与最近时间范围的真实 MySQL `EXPLAIN`。
+
+Phase 4I 隔离测试另覆盖两张延伸表、binding open ID、全域 alias 唯一索引及
+partial-rerun；升级完成后为 29 张业务表加 1 张 ledger 表。
 
 测试只使用随机 loopback 端口、tmpfs 的临时 MySQL 8 容器及纯合成数据；容器已在
 测试结束后精确清理。该证据不等于已经授权正式数据库部署。

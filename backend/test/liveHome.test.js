@@ -221,6 +221,7 @@ test('admin aggregate exposes one bounded safe queue projection', async () => {
       public_id: 'request-current',
       version: 3,
       status: 'active',
+      eta: null,
       title: '当前歌曲',
       artist: null
     },
@@ -228,12 +229,56 @@ test('admin aggregate exposes one bounded safe queue projection', async () => {
       public_id: 'request-next',
       version: 2,
       status: 'queued',
+      eta: null,
       title: '下一首',
       artist: null
     }],
-    waiting_count: 1
+    waiting_count: 1,
+    revision: 0
   });
   assert.equal(JSON.stringify(result.control.queue).includes('requester'), false);
+});
+
+test('live-home projects effective capacity, ETA, revision, and bounded undo state', async () => {
+  const repository = memoryRepository({
+    [SETTING_KEYS.officialState]: 'live',
+    [SETTING_KEYS.songRequestsOpen]: 'true'
+  });
+  repository.getSongRequestControl = async () => ({
+    manual_open: true,
+    auto_capacity_blocked: false,
+    effective_open: true,
+    close_reason: null,
+    eta_paused: false,
+    eta_by_public_id: new Map([
+      ['request-current', { paused: false, min_minutes: 0, max_minutes: 0 }],
+      ['request-next', { paused: false, min_minutes: 4, max_minutes: 6 }]
+    ]),
+    revision: 17,
+    undo: {
+      available: true,
+      expected_revision: 17,
+      seconds_remaining: 24
+    }
+  });
+  const result = await createLiveHomeService({
+    repository,
+    clock: () => NOW,
+    roomId: ROOM_ID
+  }).getAdminHome();
+  assert.equal(result.song_requests.effective_open, true);
+  assert.deepEqual(result.song_requests.next.eta, {
+    paused: false,
+    min_minutes: 4,
+    max_minutes: 6
+  });
+  assert.equal(result.control.queue.revision, 17);
+  assert.deepEqual(result.control.eta, { paused: false, revision: 0 });
+  assert.deepEqual(result.control.undo, {
+    available: true,
+    expected_revision: 17,
+    seconds_remaining: 24
+  });
 });
 
 test('recent support is scoped to the configured site and room', async () => {

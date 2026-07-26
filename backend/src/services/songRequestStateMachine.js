@@ -8,12 +8,12 @@ const SESSION_TRANSITIONS = Object.freeze({
 const REQUEST_TRANSITIONS = Object.freeze({
   observed: new Set(['needs_match', 'queued', 'rejected', 'cancelled']),
   needs_match: new Set(['queued', 'rejected', 'cancelled']),
-  queued: new Set(['active', 'rejected', 'cancelled', 'skipped']),
+  queued: new Set(['active', 'cancelled', 'skipped']),
   active: new Set(['completed', 'skipped', 'failed']),
   completed: new Set(),
   rejected: new Set(),
   cancelled: new Set(),
-  skipped: new Set(),
+  skipped: new Set(['queued', 'cancelled']),
   failed: new Set(['queued', 'cancelled'])
 });
 

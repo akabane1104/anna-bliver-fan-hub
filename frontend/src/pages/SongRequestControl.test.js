@@ -16,7 +16,12 @@ jest.mock('../services', () => ({
     transitionRequest: jest.fn(),
     setFulfillment: jest.fn(),
     matchRequest: jest.fn(),
-    reorder: jest.fn()
+    reorder: jest.fn(),
+    getAdminSettings: jest.fn(),
+    updateAdminSettings: jest.fn(),
+    setEtaPaused: jest.fn(),
+    setSongPolicy: jest.fn(),
+    undoLastAction: jest.fn()
   }
 }));
 
@@ -88,6 +93,12 @@ describe('SongRequestControl', () => {
     mockSongRequestService.getRecoverableSessions.mockResolvedValue({ sessions: [session] });
     mockSongRequestService.getSessionRequests.mockResolvedValue({
       session,
+      revision: 12,
+      undo: {
+        available: true,
+        expected_revision: 12,
+        seconds_remaining: 24
+      },
       requests: [active, firstWaiting, secondWaiting]
     });
     mockSongRequestService.getCatalog.mockResolvedValue({
@@ -108,13 +119,29 @@ describe('SongRequestControl', () => {
       }],
       pagination: { page: 1, totalPages: 1, total: 1 }
     });
+    mockSongRequestService.getAdminSettings.mockResolvedValue({
+      settings: {
+        queue_limit: 12,
+        reopen_threshold: 8,
+        max_eta_minutes: 90,
+        reopen_eta_minutes: 60,
+        default_song_seconds: 240,
+        buffer_seconds: 30,
+        eta_paused: false,
+        revision: 4
+      }
+    });
     for (const method of [
       'transitionSession',
       'createManualRequest',
       'transitionRequest',
       'setFulfillment',
       'matchRequest',
-      'reorder'
+      'reorder',
+      'updateAdminSettings',
+      'setEtaPaused',
+      'setSongPolicy',
+      'undoLastAction'
     ]) {
       mockSongRequestService[method].mockResolvedValue({ status: 'accepted' });
     }
@@ -186,7 +213,12 @@ describe('SongRequestControl', () => {
     expect(mockSongRequestService.transitionRequest).toHaveBeenCalledWith(
       active.public_id,
       'skip',
-      active.version
+      active.version,
+      {
+        reasonCode: 'manual_skip',
+        publicReason: '',
+        internalNote: ''
+      }
     );
 
     const moveDown = container.querySelector(`button[aria-label="下移 后来"]`);
@@ -201,15 +233,34 @@ describe('SongRequestControl', () => {
     );
   });
 
-  test('remove requires confirmation before issuing cancel', async () => {
+  test('reject requires confirmation and sends canonical reason fields', async () => {
+    mockSongRequestService.getSessionRequests.mockResolvedValue({
+      session,
+      revision: 12,
+      undo: {
+        available: true,
+        expected_revision: 12,
+        seconds_remaining: 24
+      },
+      requests: [
+        active,
+        {
+          ...firstWaiting,
+          status: 'needs_match',
+          matched_song: null,
+          match_method: 'ambiguous'
+        }
+      ]
+    });
     await renderPage();
     const removeButton = [...container.querySelectorAll('button')]
-      .find((button) => button.textContent === '移除');
+      .find((button) => button.textContent === '拒绝');
     act(() => removeButton.dispatchEvent(new MouseEvent('click', { bubbles: true })));
     expect(mockSongRequestService.transitionRequest).not.toHaveBeenCalledWith(
       firstWaiting.public_id,
-      'cancel',
-      firstWaiting.version
+      'reject',
+      firstWaiting.version,
+      expect.anything()
     );
 
     const confirmButton = [...container.querySelectorAll('.feedback-modal-actions button')]
@@ -220,9 +271,73 @@ describe('SongRequestControl', () => {
     });
     expect(mockSongRequestService.transitionRequest).toHaveBeenCalledWith(
       firstWaiting.public_id,
-      'cancel',
-      firstWaiting.version
+      'reject',
+      firstWaiting.version,
+      {
+        reasonCode: 'manual_rejection',
+        publicReason: '',
+        internalNote: ''
+      }
     );
+  });
+
+  test('matches a pending request with an optional saved alias', async () => {
+    const pendingReview = {
+      ...firstWaiting,
+      status: 'needs_match',
+      requested_title: '年輪',
+      matched_song: null,
+      match_method: 'normalized_exact',
+      match_confidence: 0.9
+    };
+    mockSongRequestService.getSessionRequests.mockResolvedValue({
+      session,
+      revision: 12,
+      requests: [active, pendingReview]
+    });
+    await renderPage();
+    const songSelect = container.querySelector('select[aria-label="为 年輪 选择歌曲"]');
+    const saveAlias = [...container.querySelectorAll('label')]
+      .find((label) => label.textContent.includes('保存原始输入为别名'))
+      .querySelector('input');
+    const confirmMatch = [...container.querySelectorAll('.song-control-match button')]
+      .find((button) => button.textContent === '确认');
+
+    await act(async () => {
+      songSelect.value = '1';
+      songSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      saveAlias.click();
+      await flush();
+    });
+    await act(async () => {
+      confirmMatch.click();
+      await flush();
+    });
+
+    expect(mockSongRequestService.matchRequest).toHaveBeenCalledWith(
+      pendingReview.public_id,
+      pendingReview.version,
+      1,
+      { saveAlias: true }
+    );
+  });
+
+  test('supports ETA pause and revision-bound undo controls', async () => {
+    await renderPage();
+    const pauseEta = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent === '暂停 ETA');
+    const undo = [...container.querySelectorAll('button')]
+      .find((button) => button.textContent.includes('撤销最近操作'));
+
+    await act(async () => {
+      pauseEta.click();
+      await flush();
+      undo.click();
+      await flush();
+    });
+
+    expect(mockSongRequestService.setEtaPaused).toHaveBeenCalledWith(true, 4);
+    expect(mockSongRequestService.undoLastAction).toHaveBeenCalledWith(12);
   });
 
   test('same-tick destructive action enters the API only once before the first promise settles', async () => {

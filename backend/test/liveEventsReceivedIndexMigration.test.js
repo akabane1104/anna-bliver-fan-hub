@@ -16,7 +16,8 @@ test('next additive migration covers received_at ordering with the stable id key
     .sort();
   assert.deepEqual(migrationFiles, [
     '202607240001_phase_4b_4c_live_control.sql',
-    '202607240002_live_events_received_at_index.sql'
+    '202607240002_live_events_received_at_index.sql',
+    '202607240003_phase_4i_song_request_experience.sql'
   ]);
 
   const sql = fs.readFileSync(

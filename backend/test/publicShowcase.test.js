@@ -357,7 +357,7 @@ test('single-site song catalog replaces the legacy first-playlist workflow', () 
   assert.match(schema, /'site_playlist_id', CAST\(LAST_INSERT_ID\(\) AS CHAR\)/);
   assert.match(seed, /ensureSitePlaylist\(connection, userId\)/);
 
-  assert.match(page, /playlistService\.getAllSongs\(\)/);
+  assert.match(page, /songRequestService\.getCatalog\(/);
   assert.match(page, /permissionService\.PERMISSIONS\.PLAYLIST_MANAGE/);
   assert.match(page, /submittingRef\.current/);
   assert.doesNotMatch(page, /没有可添加歌曲的歌单|playlist\.edit\.(?:single|batch)|defaultPlaylistId/);

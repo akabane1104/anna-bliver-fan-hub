@@ -39,6 +39,8 @@ describe('live home API services', () => {
       outcome: 'skipped',
       activate_next: true
     });
+    await liveAdminService.setEtaPaused(true, 9);
+    await liveAdminService.undoLastAction(10);
 
     expect(api.put).toHaveBeenNthCalledWith(
       1,
@@ -60,6 +62,14 @@ describe('live home API services', () => {
         outcome: 'skipped',
         activate_next: true
       }
+    );
+    expect(api.put).toHaveBeenCalledWith(
+      '/live-control/home/eta',
+      { paused: true, expected_revision: 9 }
+    );
+    expect(api.post).toHaveBeenCalledWith(
+      '/live-control/home/undo',
+      { expected_revision: 10 }
     );
   });
 });

@@ -3,17 +3,25 @@ import readXlsxFile from 'read-excel-file';
 import { playlistService, authService, permissionService, songRequestService } from '../services';
 import BackButton from '../components/BackButton';
 import PublicSongQueue from '../components/PublicSongQueue';
-import { InlineAlert, useFeedback } from '../components/FeedbackProvider';
+import ViewerSongRequestPanel from '../components/ViewerSongRequestPanel';
+import { useFeedback } from '../components/FeedbackProvider';
 import { useSiteSettings } from '../context/SiteSettingsContext';
 import {
   createIdempotencyKey,
+  normalizeAvailability,
+  normalizeSongRequestCenter,
   requestErrorMessage as songRequestErrorMessage
 } from '../utils/songRequestUi';
+import usePollingResource from '../utils/usePollingResource';
 
 const requestErrorMessage = (fallback, error) => {
   const detail = error?.response?.data?.message;
   return detail ? `${fallback}：${detail}` : fallback;
 };
+
+const centerPollInterval = (data) => (
+  data?.refreshAfterMs || data?.refresh_after_ms || 5000
+);
 
 function Playlists() {
   const { confirm, toast } = useFeedback();
@@ -39,17 +47,54 @@ function Playlists() {
   const [isBatchAdding, setIsBatchAdding] = useState(false);
   const [isManagingTags, setIsManagingTags] = useState(false);
   const [allTags, setAllTags] = useState([]);
-  const [queueData, setQueueData] = useState(null);
-  const [queueLoading, setQueueLoading] = useState(true);
-  const [queueError, setQueueError] = useState('');
   const [requestingSongIds, setRequestingSongIds] = useState(new Set());
   const [lastAcceptedRequest, setLastAcceptedRequest] = useState(null);
-  const queueRequestInFlight = useRef(false);
   const songRequestInFlight = useRef(new Set());
   const requestKeys = useRef(new Map());
+  const viewerActionInFlight = useRef(new Set());
+  const [viewerPending, setViewerPending] = useState('');
+  const [viewerFilters, setViewerFilters] = useState({ status: '', page: 1, limit: 10 });
 
   const currentUser = useMemo(() => authService.getCurrentUser(), []);
+  const authenticated = authService.isAuthenticated();
   const [canEdit, setCanEdit] = useState(false);
+  const centerLoader = useCallback(
+    ({ signal }) => songRequestService.getCenter({ signal }),
+    []
+  );
+  const centerResource = usePollingResource(centerLoader, {
+    intervalMs: centerPollInterval,
+    staleAfterMs: 30000
+  });
+  const viewerLoader = useCallback(
+    ({ signal }) => (
+      authenticated
+        ? songRequestService.getMine(viewerFilters, { signal })
+        : Promise.resolve(null)
+    ),
+    [authenticated, viewerFilters]
+  );
+  const viewerResource = usePollingResource(viewerLoader, {
+    intervalMs: 8000,
+    staleAfterMs: 30000,
+    autoRefresh: authenticated
+  });
+  const center = useMemo(
+    () => normalizeSongRequestCenter(centerResource.data || {}),
+    [centerResource.data]
+  );
+  const viewerBinding = viewerResource.data?.binding || {};
+  const viewerBindingCount = Number(
+    viewerBinding.count
+    ?? viewerBinding.binding_count
+    ?? viewerBinding.bindings?.length
+    ?? 0
+  );
+  const viewerIsBound = Boolean(
+    viewerBinding.bound
+    ?? viewerBinding.is_bound
+    ?? viewerBindingCount > 0
+  );
 // Get all unique tags from songs
   const availableTags = useMemo(
     () => ['All', ...new Set(allTags.map((tag) => tag.name))],
@@ -135,15 +180,12 @@ function Playlists() {
   const loadSongs = useCallback(async () => {
     setIsSearching(true);
     try {
-      const hasFilters = Boolean(debouncedSearchQuery) || selectedTag !== 'All';
-      const result = hasFilters
-        ? await songRequestService.getCatalog({
-            query: debouncedSearchQuery,
-            tag: selectedTag === 'All' ? '' : selectedTag,
-            page: 1,
-            limit: 500
-          })
-        : { songs: await playlistService.getAllSongs() };
+      const result = await songRequestService.getCatalog({
+        query: debouncedSearchQuery,
+        tag: selectedTag === 'All' ? '' : selectedTag,
+        page: 1,
+        limit: 500
+      });
       const songs = result.songs || [];
       songs.sort((a, b) => (a.title || '').localeCompare(b.title || '', 'zh-CN'));
       setAllSongs(songs);
@@ -156,21 +198,6 @@ function Playlists() {
       setIsSearching(false);
     }
   }, [debouncedSearchQuery, selectedTag]);
-
-  const loadQueue = useCallback(async () => {
-    if (queueRequestInFlight.current) return;
-    queueRequestInFlight.current = true;
-    setQueueLoading(true);
-    try {
-      setQueueData(await songRequestService.getCurrentQueue());
-      setQueueError('');
-    } catch (err) {
-      setQueueError(songRequestErrorMessage(err, '加载队列'));
-    } finally {
-      queueRequestInFlight.current = false;
-      setQueueLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     loadSongs();
@@ -192,21 +219,6 @@ function Playlists() {
       }
     }
   }, [currentUser]);
-
-  useEffect(() => {
-    loadQueue();
-    const timer = window.setInterval(() => {
-      if (document.visibilityState === 'visible') loadQueue();
-    }, 5000);
-    const handleVisibility = () => {
-      if (document.visibilityState === 'visible') loadQueue();
-    };
-    document.addEventListener('visibilitychange', handleVisibility);
-    return () => {
-      window.clearInterval(timer);
-      document.removeEventListener('visibilitychange', handleVisibility);
-    };
-  }, [loadQueue]);
 
   if (loading) {
     return <div className="loading">正在加载歌单...</div>;
@@ -235,7 +247,14 @@ function Playlists() {
 
   const handleSongRequest = async (event, song) => {
     event.stopPropagation();
-    if (!authService.isAuthenticated() || songRequestInFlight.current.has(song.id)) return;
+    const availability = normalizeAvailability(song);
+    if (
+      !authenticated
+      || !viewerIsBound
+      || !center.effectiveOpen
+      || !availability.requestable
+      || songRequestInFlight.current.has(song.id)
+    ) return;
     songRequestInFlight.current.add(song.id);
     const idempotencyKey = requestKeys.current.get(song.id) || createIdempotencyKey();
     requestKeys.current.set(song.id, idempotencyKey);
@@ -250,10 +269,16 @@ function Playlists() {
           : `《${song.title}》已加入队列`,
         { type: 'success' }
       );
-      await loadQueue();
+      await Promise.all([
+        centerResource.refresh(),
+        viewerResource.refresh(),
+        loadSongs()
+      ]);
     } catch (err) {
       toast(songRequestErrorMessage(err, '点歌'), { type: 'error' });
-      if (err?.response?.status === 409) await loadQueue();
+      if (err?.response?.status === 409) {
+        await Promise.all([centerResource.refresh(), viewerResource.refresh(), loadSongs()]);
+      }
     } finally {
       songRequestInFlight.current.delete(song.id);
       setRequestingSongIds((current) => {
@@ -262,6 +287,41 @@ function Playlists() {
         return next;
       });
     }
+  };
+
+  const runViewerAction = async (key, task) => {
+    if (viewerActionInFlight.current.has(key)) return;
+    viewerActionInFlight.current.add(key);
+    setViewerPending(key);
+    try {
+      await task();
+      await Promise.all([
+        centerResource.refresh(),
+        viewerResource.refresh(),
+        loadSongs()
+      ]);
+    } catch (err) {
+      toast(songRequestErrorMessage(err, '更新点歌'), { type: 'error' });
+    } finally {
+      viewerActionInFlight.current.delete(key);
+      setViewerPending((current) => (current === key ? '' : current));
+    }
+  };
+
+  const withdrawRequest = (request, revision) => {
+    const publicId = request.publicId || request.public_id;
+    return runViewerAction(
+      `withdraw:${publicId}`,
+      () => songRequestService.withdraw(publicId, revision)
+    );
+  };
+
+  const rerequest = (request) => {
+    const publicId = request.publicId || request.public_id;
+    return runViewerAction(
+      `rerequest:${publicId}`,
+      () => songRequestService.rerequest(publicId, createIdempotencyKey())
+    );
   };
 
   const handleEditClick = (e, song) => {
@@ -412,18 +472,25 @@ function Playlists() {
       </div>
 
       <PublicSongQueue
-        data={queueData}
-        loading={queueLoading}
-        error={queueError}
-        onRetry={loadQueue}
+        data={centerResource.data}
+        loading={centerResource.loading || centerResource.refreshing}
+        error={centerResource.error ? songRequestErrorMessage(centerResource.error, '加载队列') : ''}
+        onRetry={centerResource.refresh}
         lastAccepted={lastAcceptedRequest}
       />
 
-      {!authService.isAuthenticated() && (
-        <InlineAlert type="info" title="登录后可以点歌">
-          你仍可浏览和搜索全部歌曲；登录网站账号后即可加入统一点歌队列。
-        </InlineAlert>
-      )}
+      <ViewerSongRequestPanel
+        authenticated={authenticated}
+        data={viewerResource.data}
+        loading={viewerResource.loading || viewerResource.refreshing}
+        error={viewerResource.error ? songRequestErrorMessage(viewerResource.error, '加载我的点歌') : ''}
+        filters={viewerFilters}
+        onFiltersChange={setViewerFilters}
+        onRefresh={viewerResource.refresh}
+        onWithdraw={withdrawRequest}
+        onRerequest={rerequest}
+        pending={viewerPending}
+      />
 
       {editingSong && (
         <EditSongModal
@@ -547,69 +614,104 @@ function Playlists() {
               <span>可以清除搜索或分类后再试。</span>
             </div>
           ) : <div className="songs-grid">
-            {filteredSongs.slice(0, visibleCount).map((song, index) => (
-              <div
-                key={song.id}
-                className="song-bubble"
-                onClick={() => handleCopyToClipboard(song.title)}
-                style={{ cursor: 'pointer' }}
-              >
-
-                {song.note && (
-                  <div className="song-note-badge">
-                    <ScrollingText content={`冠名：${song.note}`} />
-                  </div>
-                )}
-                <div className="song-bubble-content">
-                  <div className="song-bubble-title" >
-                    <ScrollingText content={song.title} />
-                  </div>
-                  <div className="song-bottom-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
-                    <div className="song-bubble-artist" style={{ width: '100%' }}>
-                      <ScrollingText content={song.artist} />
+            {filteredSongs.slice(0, visibleCount).map((song) => {
+              const availability = normalizeAvailability(song);
+              const requestDisabled = (
+                !authenticated
+                || !viewerIsBound
+                || !center.effectiveOpen
+                || !availability.requestable
+                || requestingSongIds.has(song.id)
+              );
+              const requestLabel = requestingSongIds.has(song.id)
+                ? '提交中...'
+                : (!authenticated
+                  ? '登录后点歌'
+                  : (!viewerIsBound
+                    ? '绑定后点歌'
+                    : (!center.effectiveOpen
+                      ? '暂未开放'
+                      : (availability.requestable ? '点歌' : availability.reason))));
+              return (
+                <article key={song.id} className="song-bubble">
+                  {song.note && (
+                    <div className="song-note-badge">
+                      <ScrollingText content={`冠名：${song.note}`} />
                     </div>
-                    {song.tags && song.tags.length > 0 && (
-                      <div className="song-tags" style={{ width: '100%', justifyContent: 'flex-start', marginLeft: 0, marginTop: 0 }}>
-                        <ScrollingText
-                          content={
-                            <div style={{ display: 'flex', gap: '4px' }}>
-                              {song.tags.map((tag, i) => (
-                                <span
-                                  key={i}
-                                  className="song-tag"
-                                  style={{ backgroundColor: tag.color || '#6c5ce7ff', whiteSpace: 'nowrap' }}
-                                >
-                                  {tag.name}
-                                </span>
-                              ))}
-                            </div>
-                          }
-                        />
+                  )}
+                  <div className="song-bubble-content">
+                    <div className="song-bubble-title">
+                      <ScrollingText content={song.title} />
+                    </div>
+                    <div className="song-bottom-row" style={{ flexDirection: 'column', alignItems: 'flex-start', gap: '4px' }}>
+                      <div className="song-bubble-artist" style={{ width: '100%' }}>
+                        <ScrollingText content={song.artist} />
                       </div>
-                    )}
+                      {song.tags && song.tags.length > 0 && (
+                        <div className="song-tags" style={{ width: '100%', justifyContent: 'flex-start', marginLeft: 0, marginTop: 0 }}>
+                          <ScrollingText
+                            content={(
+                              <div style={{ display: 'flex', gap: '4px' }}>
+                                {song.tags.map((tag, i) => (
+                                  <span
+                                    key={i}
+                                    className="song-tag"
+                                    style={{ backgroundColor: tag.color || '#6c5ce7ff', whiteSpace: 'nowrap' }}
+                                  >
+                                    {tag.name}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          />
+                        </div>
+                      )}
+                      <div className="song-availability" aria-label={`《${song.title}》点歌状态`}>
+                        {availability.sungToday && <span>今天已唱</span>}
+                        {availability.cooldownUntil && <span>冷却中</span>}
+                        {availability.alreadyQueued && <span>已在队列</span>}
+                        {availability.temporarilyBlocked && <span>暂时不可点</span>}
+                        {availability.specialEventOnly && <span>活动限定</span>}
+                        {!availability.requestable && availability.reason && (
+                          <small>{availability.reason}</small>
+                        )}
+                      </div>
+                    </div>
                   </div>
-                </div>
-                {isEditMode && (
-                  <button
-                    className="song-edit-btn"
-                    onClick={(e) => handleEditClick(e, song)}
-                  >
-                    ✏️
-                  </button>
-                )}
-                {!isEditMode && (
-                  <button
-                    type="button"
-                    className="song-request-button"
-                    onClick={(event) => handleSongRequest(event, song)}
-                    disabled={!authService.isAuthenticated() || requestingSongIds.has(song.id)}
-                    aria-label={`点歌 ${song.title}`}
-                  >
-                    {requestingSongIds.has(song.id) ? '提交中...' : '点歌'}
-                  </button>
-                )}
-              </div>
-            ))}
+                  {isEditMode ? (
+                    <button
+                      type="button"
+                      className="song-edit-btn"
+                      onClick={(event) => handleEditClick(event, song)}
+                      aria-label={`编辑 ${song.title}`}
+                    >
+                      编辑
+                    </button>
+                  ) : (
+                    <div className="song-card-actions">
+                      <button
+                        type="button"
+                        className="song-copy-button"
+                        onClick={() => handleCopyToClipboard(song.title)}
+                        aria-label={`复制《${song.title}》点歌口令`}
+                      >
+                        复制口令
+                      </button>
+                      <button
+                        type="button"
+                        className="song-request-button"
+                        onClick={(event) => handleSongRequest(event, song)}
+                        disabled={requestDisabled}
+                        aria-label={`${requestLabel} ${song.title}`}
+                        title={requestLabel}
+                      >
+                        {requestLabel}
+                      </button>
+                    </div>
+                  )}
+                </article>
+              );
+            })}
           </div>}
         </div>
       )}

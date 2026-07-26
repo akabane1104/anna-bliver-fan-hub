@@ -406,9 +406,39 @@ async function inspectMigrationState(connection, config, migration) {
   };
 }
 
+async function assertMigrationDataPreconditions(connection, migration) {
+  if (migration.version !== '202607240003') return;
+  const [tables] = await connection.query(
+    `SELECT 1 AS present
+     FROM information_schema.TABLES
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'song_aliases'
+     LIMIT 1`
+  );
+  if (!tables.length) return;
+
+  for (const column of ['normalized_alias', 'script_key']) {
+    const [rows] = await connection.query(
+      `SELECT 1 AS collision
+       FROM song_aliases
+       WHERE ${column} IS NOT NULL AND ${column} <> ''
+       GROUP BY ${column}
+       HAVING COUNT(DISTINCT song_id) > 1
+       LIMIT 1`
+    );
+    if (rows.length) {
+      throw new MigrationError(
+        'migration_song_alias_collision',
+        [`song_aliases.${column}`]
+      );
+    }
+  }
+}
+
 async function preflightOnConnection(connection, config, migration) {
   const identity = await readDatabaseIdentity(connection, config);
   await assertLegacyDependencies(connection, config.database);
+  await assertMigrationDataPreconditions(connection, migration);
   const state = await inspectMigrationState(connection, config, migration);
   return {
     command: 'preflight',
@@ -614,6 +644,7 @@ module.exports = {
   MIGRATION,
   MigrationError,
   acquireMigrationLock,
+  assertMigrationDataPreconditions,
   createMigrationRunner,
   loadMigration,
   loadMigrations,

@@ -10,6 +10,7 @@ const { createLiveHomeRepository } = require('../src/services/liveHomeService');
 const { createLiveSessionService } = require('../src/services/liveSessionService');
 const { matchSongInPlaylist } = require('../src/services/songMatcherService');
 const { createSongRequestService } = require('../src/services/songRequestService');
+const { SongRequestError } = require('../src/utils/songRequestError');
 
 const CONFIRMATION = 'phase4c-isolated-song-requests';
 const integrationEnabled = process.env.PHASE4C_TEST_DB_CONFIRM === CONFIRMATION;
@@ -118,14 +119,16 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
        WHERE table_schema = DATABASE()
        ORDER BY table_name`
     );
-    assert.equal(tableRows.length, 27);
+    assert.equal(tableRows.length, 29);
     const tableNames = new Set(tableRows.map((row) => row.TABLE_NAME || row.table_name));
     for (const name of [
       'live_events',
       'live_sessions',
       'song_requests',
       'song_request_history',
-      'song_aliases'
+      'song_aliases',
+      'song_request_policies',
+      'song_request_details'
     ]) {
       assert.equal(tableNames.has(name), true, name);
     }
@@ -187,7 +190,28 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
       'SELECT id, title, artist FROM songs ORDER BY id'
     );
     const sessionService = createLiveSessionService({ pool });
-    const requestService = createSongRequestService({ pool });
+    const testPolicy = {
+      async resolveBoundUserByOpenId() {
+        return { id: actorUserId, username: 'phase4c-admin' };
+      },
+      async lockUserAndBindings() {
+        return {
+          user: { id: actorUserId, username: 'phase4c-admin' },
+          bindings: [{ id: 1 }]
+        };
+      },
+      async assertSongPolicy(connection) {
+        const [rows] = await connection.query(
+          `SELECT setting_value FROM settings
+           WHERE setting_key = 'live_home_song_requests_open' LIMIT 1`
+        );
+        if (rows[0]?.setting_value === 'false') {
+          throw new SongRequestError(409, 'requests_closed', 'synthetic closed gate');
+        }
+        return {};
+      }
+    };
+    const requestService = createSongRequestService({ pool, policy: testPolicy });
     const liveService = createLiveEventService({
       repository: createMysqlLiveEventRepository(pool),
       acceptedEventObserver: requestService.observeAcceptedDanmaku.bind(requestService)
@@ -255,6 +279,108 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
     session = await sessionService.transition(session.public_id, 'open', session.version);
 
     const prefix = `phase4c:${Date.now()}`;
+    const [policyUserResult] = await pool.query(
+      `INSERT INTO users (username, email, password, role)
+       VALUES (?, ?, 'synthetic-not-used', 'user')`,
+      [`phase4i-viewer-${Date.now()}`, `phase4i-${Date.now()}@example.com`]
+    );
+    const policyUserId = policyUserResult.insertId;
+    await pool.query(
+      `INSERT INTO user_bilibili_bindings (
+         user_id, bilibili_uid, bilibili_open_id, bilibili_uname, status
+       ) VALUES (?, ?, ?, 'phase4i-viewer', 'verified')`,
+      [policyUserId, `9${String(Date.now()).slice(-12)}`, `${prefix}:bound-open-id`]
+    );
+    const productionPolicyService = createSongRequestService({ pool });
+    const policyResults = await Promise.allSettled([
+      productionPolicyService.createWebsiteRequest({
+        ...TARGET,
+        song_id: songIds['後臺']
+      }, {
+        userId: policyUserId,
+        idempotencyKey: `${prefix}:policy-a`
+      }),
+      productionPolicyService.createWebsiteRequest({
+        ...TARGET,
+        song_id: songIds['后台']
+      }, {
+        userId: policyUserId,
+        idempotencyKey: `${prefix}:policy-b`
+      })
+    ]);
+    assert.deepEqual(
+      policyResults.map(({ status }) => status).sort(),
+      ['fulfilled', 'rejected']
+    );
+    assert.equal(
+      policyResults.find(({ status }) => status === 'rejected').reason.code,
+      'user_active_limit'
+    );
+    const firstPolicyRequest = policyResults.find(({ status }) => status === 'fulfilled').value;
+    const skippedPolicyRequest = await productionPolicyService.transitionRequest(
+      firstPolicyRequest.request.public_id,
+      'skipped',
+      { expected_version: firstPolicyRequest.request.version },
+      actorUserId
+    );
+    const replacementSongId = Object.values(songIds)
+      .find((songId) => Number(songId) !== Number(skippedPolicyRequest.matched_song_id));
+    assert.ok(replacementSongId);
+    await productionPolicyService.createWebsiteRequest({
+      ...TARGET,
+      song_id: replacementSongId
+    }, {
+      userId: policyUserId,
+      idempotencyKey: `${prefix}:policy-replacement`
+    });
+    await expectServiceError(
+      productionPolicyService.transitionRequest(
+        skippedPolicyRequest.public_id,
+        'queued',
+        { expected_version: skippedPolicyRequest.version },
+        actorUserId
+      ),
+      'user_active_limit'
+    );
+    const [policyRequests] = await pool.query(
+      'SELECT id FROM song_requests WHERE requester_user_id = ?',
+      [policyUserId]
+    );
+    assert.equal(policyRequests.length, 2);
+    await pool.query(
+      `DELETE FROM song_request_history
+       WHERE request_id IN (
+         SELECT id FROM song_requests WHERE requester_user_id = ?
+       )`,
+      [policyUserId]
+    );
+    await pool.query(
+      'DELETE FROM song_requests WHERE requester_user_id = ?',
+      [policyUserId]
+    );
+    await pool.query(
+      'DELETE FROM user_bilibili_bindings WHERE user_id = ?',
+      [policyUserId]
+    );
+    await pool.query('DELETE FROM users WHERE id = ?', [policyUserId]);
+
+    const productionPolicyLiveService = createLiveEventService({
+      repository: createMysqlLiveEventRepository(pool),
+      acceptedEventObserver: productionPolicyService.observeAcceptedDanmaku.bind(
+        productionPolicyService
+      )
+    });
+    const requestsBeforeUnknownIdentity = await tableCount(pool, 'song_requests');
+    const unknownIdentity = await productionPolicyLiveService.record(
+      liveEvent(`${prefix}:unknown-identity`, '点歌 年轮')
+    );
+    assert.equal(unknownIdentity.status, 'accepted');
+    assert.deepEqual(unknownIdentity.observation, {
+      status: 'ignored',
+      reason: 'identity_binding_required'
+    });
+    assert.equal(await tableCount(pool, 'song_requests'), requestsBeforeUnknownIdentity);
+
     const firstEvent = liveEvent(`${prefix}:first`, '點歌 年輪');
     const firstResult = await liveService.record(firstEvent);
     assert.equal(firstResult.status, 'accepted');
@@ -305,37 +431,33 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
     );
     assert.equal(replayRows[0].source, 'replay');
     assert.equal(replayRows[0].source_event_id, `${prefix}:replay`);
-    assert.equal(replayRows[0].requester_user_id, null);
+    assert.equal(Number(replayRows[0].requester_user_id), actorUserId);
     assert.equal(replayRows[0].requester_open_id, 'phase4c_synthetic_open_id_private');
 
     session = await sessionService.getByPublicId(session.public_id);
     session = await sessionService.transition(session.public_id, 'paused', session.version);
+    const requestsBeforePausedEvent = await tableCount(pool, 'song_requests');
     const pausedEvent = await liveService.record(
       liveEvent(`${prefix}:paused`, '点歌 年轮')
     );
     assert.equal(pausedEvent.status, 'accepted');
-    assert.equal(pausedEvent.observation.request.status, 'observed');
-    assert.equal(pausedEvent.observation.request.session_id, null);
-    assert.equal(pausedEvent.observation.request.queue_order, null);
+    assert.deepEqual(pausedEvent.observation, {
+      status: 'ignored',
+      reason: 'requests_closed'
+    });
+    assert.equal(await tableCount(pool, 'song_requests'), requestsBeforePausedEvent);
     session = await sessionService.transition(session.public_id, 'open', session.version);
-    const assigned = await requestService.assignToSession(
-      pausedEvent.observation.request.public_id,
-      {
-        session_public_id: session.public_id,
-        expected_version: 0,
-        reason: 'synthetic assignment'
-      },
-      actorUserId
-    );
-    assert.equal(assigned.status, 'queued');
 
     const alias = await requestService.addAlias(songIds['年轮'], '圈圈歌', actorUserId);
     assert.equal((await matchSongInPlaylist(pool, playlistId, '圈圈歌')).match_method, 'alias_exact');
     await requestService.addAlias(songIds['年轮'], '小幸運', actorUserId);
     assert.equal((await matchSongInPlaylist(pool, playlistId, '小幸运')).match_method, 'alias_script');
-    await requestService.addAlias(songIds['後來'], '小幸運', actorUserId);
-    assert.equal((await matchSongInPlaylist(pool, playlistId, '小幸运')).kind, 'ambiguous');
-    assert.equal(await tableCount(pool, 'song_aliases'), 3);
+    await expectServiceError(
+      requestService.addAlias(songIds['後來'], '小幸運', actorUserId),
+      'equivalent_alias_exists'
+    );
+    assert.equal((await matchSongInPlaylist(pool, playlistId, '小幸运')).song.id, songIds['年轮']);
+    assert.equal(await tableCount(pool, 'song_aliases'), 2);
 
     const exactLower = await matchSongInPlaylist(pool, playlistId, 'fancy');
     const exactUpper = await matchSongInPlaylist(pool, playlistId, 'FANCY');
@@ -413,11 +535,12 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
 
     const rejectedSource = await requestService.createWebsiteRequest({
       ...TARGET,
-      query: '年轮'
+      query: 'Phase 4I unmatched review request'
     }, {
       userId: actorUserId,
       idempotencyKey: 'phase4c-rejected'
     });
+    assert.equal(rejectedSource.request.status, 'needs_match');
     const rejected = await requestService.transitionRequest(
       rejectedSource.request.public_id,
       'rejected',
@@ -624,6 +747,47 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
       ),
       'version_conflict'
     );
+    const afterReorder = await requestService.getSessionRequests(session.public_id);
+    const [latestUndoRows] = await pool.query(
+      `SELECT h.id, h.action,
+              JSON_CONTAINS_PATH(h.metadata, 'one', '$.before') AS has_before,
+              TIMESTAMPDIFF(SECOND, h.created_at, UTC_TIMESTAMP(3)) AS age_seconds
+       FROM song_request_history h
+       INNER JOIN song_requests sr ON sr.id = h.request_id
+       INNER JOIN live_sessions ls ON ls.id = sr.session_id
+       WHERE ls.public_id = ?
+       ORDER BY h.id DESC
+       LIMIT 1`,
+      [session.public_id]
+    );
+    assert.equal(latestUndoRows[0].action, 'reordered');
+    assert.equal(Number(latestUndoRows[0].has_before), 1);
+    assert.ok(Number(latestUndoRows[0].age_seconds) <= 30);
+    assert.equal(afterReorder.undo.available, true);
+    const [newerHistoryResult] = await pool.query(
+      `INSERT INTO song_request_history (
+         request_id, action, actor_user_id, metadata
+       ) SELECT id, 'synthetic_newer_change', ?, JSON_OBJECT()
+         FROM song_requests
+         WHERE public_id = ?`,
+      [actorUserId, reorderable[0]]
+    );
+    await expectServiceError(
+      requestService.undoLatest(afterReorder.undo.expected_revision, actorUserId),
+      'undo_conflict'
+    );
+    await pool.query(
+      'DELETE FROM song_request_history WHERE id = ?',
+      [newerHistoryResult.insertId]
+    );
+    await requestService.undoLatest(afterReorder.undo.expected_revision, actorUserId);
+    const afterReorderUndo = await requestService.getSessionRequests(session.public_id);
+    assert.deepEqual(
+      afterReorderUndo.requests
+        .filter(({ status }) => ['pending_review', 'queued'].includes(status))
+        .map(({ public_id }) => public_id),
+      reorderable
+    );
 
     let foreignSession = await sessionService.createDraft({
       site_id: 'phase4c-foreign',
@@ -721,7 +885,8 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
     const publicSerialized = JSON.stringify(publicQueue);
     assert.doesNotMatch(publicSerialized, /requester_open_id|requester_user_id|email/);
     assert.doesNotMatch(publicSerialized, /phase4c_synthetic_open_id_private/);
-    assert.ok(publicQueue.requests.every(({ public_id }) => typeof public_id === 'string'));
+    assert.ok(publicQueue.requests.every(({ public_id }) => public_id === undefined));
+    assert.ok(publicQueue.requests.every(({ display_key }) => typeof display_key === 'string'));
 
     const liveHomeQueue = await createLiveHomeRepository({
       pool,
@@ -737,7 +902,7 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
     assert.equal(liveHomeQueue.next.public_id, liveHomeQueue.waiting[0].public_id);
 
     const beforeAdvance = await requestService.getSessionRequests(session.public_id);
-    const activeBeforeAdvance = beforeAdvance.requests.find(({ status }) => status === 'active');
+    const activeBeforeAdvance = beforeAdvance.requests.find(({ status }) => status === 'singing');
     const queuedBeforeAdvance = beforeAdvance.requests.find(({ status }) => status === 'queued');
     assert.ok(activeBeforeAdvance);
     assert.ok(queuedBeforeAdvance);
@@ -805,20 +970,20 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
         userId: actorUserId,
         idempotencyKey: 'phase4c-closed-website'
       }),
-      'song_requests_closed'
+      'requests_closed'
     );
     await expectServiceError(
       requestService.createManualRequest({
         ...TARGET,
         query: '年轮'
       }, actorUserId),
-      'song_requests_closed'
+      'requests_closed'
     );
     const closedDm = await liveService.record(
       liveEvent(`${prefix}:closed-gate`, '点歌 年轮')
     );
     assert.equal(closedDm.status, 'accepted');
-    assert.equal(closedDm.observation.reason, 'song_requests_closed');
+    assert.equal(closedDm.observation.reason, 'requests_closed');
     const [requestCountAfterClose] = await pool.query(
       'SELECT COUNT(*) AS count FROM song_requests'
     );
@@ -892,8 +1057,8 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
       roomId: closedSession.room_id
     });
     const closedResult = await liveService.record(closedTargetEvent);
-    assert.equal(closedResult.observation.request.status, 'observed');
-    assert.equal(closedResult.observation.request.session_id, null);
+    assert.equal(closedResult.observation.status, 'ignored');
+    assert.equal(closedResult.observation.reason, 'requests_closed');
 
     const [orders] = await pool.query(
       `SELECT queue_order
@@ -912,7 +1077,7 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
       'SELECT id, title, artist FROM songs ORDER BY id'
     );
     assert.deepEqual(titlesAfter, titlesBefore);
-    assert.equal(await tableCount(pool, 'song_aliases'), 2);
+    assert.equal(await tableCount(pool, 'song_aliases'), 1);
 
     for (const table of legacyTables) {
       assert.equal(await tableCount(pool, table), legacyBefore.get(table), table);

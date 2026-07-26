@@ -164,13 +164,63 @@ USE anna_bliver_fan_hub;
 INSERT INTO users (username, email, password, role)
 VALUES ('phase4d_admin', 'phase4d-admin@example.com', 'synthetic-not-a-real-password-hash', 'admin');
 SET @phase4d_admin_id = LAST_INSERT_ID();
+INSERT INTO users (username, email, password, role) VALUES
+  ('phase4d_viewer_simple', 'phase4d-viewer-simple@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_traditional', 'phase4d-viewer-traditional@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_unmatched', 'phase4d-viewer-unmatched@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_lowercase', 'phase4d-viewer-lowercase@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_uppercase', 'phase4d-viewer-uppercase@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_mixedcase', 'phase4d-viewer-mixedcase@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_duplicate', 'phase4d-viewer-duplicate@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_conflict', 'phase4d-viewer-conflict@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_one', 'phase4d-viewer-one@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_two', 'phase4d-viewer-two@example.com', 'synthetic-not-a-real-password-hash', 'user'),
+  ('phase4d_viewer_rollback', 'phase4d-viewer-rollback@example.com', 'synthetic-not-a-real-password-hash', 'user');
+INSERT INTO user_bilibili_bindings (
+  user_id, bilibili_uid, bilibili_open_id, bilibili_uname, status
+)
+SELECT id, 9200000000001, 'phase4d.synthetic.e2e-run.viewer-simple', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_simple'
+UNION ALL
+SELECT id, 9200000000002, 'phase4d.synthetic.e2e-run.viewer-traditional', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_traditional'
+UNION ALL
+SELECT id, 9200000000003, 'phase4d.synthetic.e2e-run.viewer-unmatched', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_unmatched'
+UNION ALL
+SELECT id, 9200000000004, 'phase4d.synthetic.e2e-run.viewer-lowercase', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_lowercase'
+UNION ALL
+SELECT id, 9200000000005, 'phase4d.synthetic.e2e-run.viewer-uppercase', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_uppercase'
+UNION ALL
+SELECT id, 9200000000006, 'phase4d.synthetic.e2e-run.viewer-mixedcase', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_mixedcase'
+UNION ALL
+SELECT id, 9200000000007, 'phase4d.synthetic.e2e-run.viewer-duplicate', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_duplicate'
+UNION ALL
+SELECT id, 9200000000008, 'phase4d.synthetic.e2e-run.viewer-conflict', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_conflict'
+UNION ALL
+SELECT id, 9200000000009, 'phase4d.synthetic.e2e-run.viewer-one', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_one'
+UNION ALL
+SELECT id, 9200000000010, 'phase4d.synthetic.e2e-run.viewer-two', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_two'
+UNION ALL
+SELECT id, 9200000000011, 'phase4d.synthetic.rollback-run.viewer-rollback', username, 'verified'
+FROM users WHERE username = 'phase4d_viewer_rollback';
 INSERT INTO playlists (title, description, created_by)
 VALUES ('Phase 4D Synthetic Playlist', 'Synthetic fixture only', @phase4d_admin_id);
 SET @phase4d_playlist_id = LAST_INSERT_ID();
 INSERT INTO songs (playlist_id, title, artist, song_order) VALUES
   (@phase4d_playlist_id, '年轮', 'Synthetic Artist', 1),
   (@phase4d_playlist_id, 'fancy', 'Synthetic Artist', 2),
-  (@phase4d_playlist_id, 'FANCY', 'Synthetic Artist', 3);
+  (@phase4d_playlist_id, 'FANCY', 'Synthetic Artist', 3),
+  (@phase4d_playlist_id, 'Simulator Duplicate', 'Synthetic Artist', 4),
+  (@phase4d_playlist_id, 'Simulator Conflict', 'Synthetic Artist', 5),
+  (@phase4d_playlist_id, 'Simulator Shared', 'Synthetic Artist', 6);
 INSERT INTO live_sessions (
   public_id, site_id, room_id, playlist_id, title, status,
   created_by_user_id, started_at
@@ -233,15 +283,10 @@ SELECT JSON_OBJECT(
       AND sr.match_method = 'exact'
       AND s.title = '年轮'
   ),
-  'traditional_ok', (
-    SELECT COUNT(*) = 1
-    FROM song_requests sr JOIN songs s ON s.id = sr.matched_song_id
+  'traditional_duplicate_blocked', (
+    SELECT COUNT(*) = 0
+    FROM song_requests sr
     WHERE sr.source_event_id = 'phase4d.e2e-run.traditional-request.1'
-      AND sr.raw_request_text = '點歌 年輪'
-      AND sr.requested_title = '年輪'
-      AND sr.normalized_query = '年轮'
-      AND sr.match_method = 'script_exact'
-      AND s.title = '年轮'
   ),
   'ordinary_absent', (
     SELECT COUNT(*) = 0 FROM song_requests
@@ -292,16 +337,14 @@ SELECT JSON_OBJECT(
   'conflict_event_once', (
     SELECT COUNT(*) = 1 FROM live_events
     WHERE event_id = 'phase4d.e2e-run.conflict.1'
-      AND JSON_UNQUOTE(JSON_EXTRACT(normalized_payload, '$.text')) = '点歌 年轮'
+      AND JSON_UNQUOTE(JSON_EXTRACT(normalized_payload, '$.text')) = '点歌 Simulator Conflict'
   ),
   'conflict_request_once', (
     SELECT COUNT(*) = 1 FROM song_requests
     WHERE source_event_id = 'phase4d.e2e-run.conflict.1'
   ),
-  'same_song_two_requests', (
-    SELECT COUNT(*) = 2
-      AND COUNT(DISTINCT queue_order) = 2
-      AND MIN(queue_order) < MAX(queue_order)
+  'same_song_duplicate_blocked', (
+    SELECT COUNT(*) = 1
     FROM song_requests
     WHERE source_event_id IN (
       'phase4d.e2e-run.same-song-viewers.1',
@@ -323,7 +366,7 @@ SELECT JSON_OBJECT(
   'stable_queue_order', (
     SELECT COUNT(*) = COUNT(DISTINCT queue_order)
       AND MIN(queue_order) = 1
-      AND MAX(queue_order) = 10
+      AND MAX(queue_order) = 8
     FROM song_requests
   ),
   'no_play_queue_column', (
@@ -545,7 +588,7 @@ DROP TRIGGER IF EXISTS phase4d_fail_song_request;
       accepted: 14,
       duplicate: 1,
       conflict: 1,
-      expectedSongRequests: 10
+      expectedSongRequests: 8
     });
 
     console.log('[phase4d-e2e] forcing one isolated transactional write failure');
@@ -592,9 +635,9 @@ DROP TRIGGER phase4d_fail_song_request;
     ).stdout.trim();
     const report = JSON.parse(reportOutput);
     assert.equal(Number(report.live_events), 14);
-    assert.equal(Number(report.song_requests), 10);
-    assert.equal(Number(report.history), 10);
-    assert.equal(Number(report.users), 1);
+    assert.equal(Number(report.song_requests), 8);
+    assert.equal(Number(report.history), 8);
+    assert.equal(Number(report.users), 12);
     assert.equal(Number(report.permissions), 0);
     assert.equal(Number(report.wallets), 0);
     assert.equal(Number(report.accounts), 0);
@@ -606,7 +649,7 @@ DROP TRIGGER phase4d_fail_song_request;
       'simple_method_ok',
       'simple_song_ok',
       'simple_ok',
-      'traditional_ok',
+      'traditional_duplicate_blocked',
       'ordinary_absent',
       'playback_absent',
       'missing_space_absent',
@@ -618,7 +661,7 @@ DROP TRIGGER phase4d_fail_song_request;
       'duplicate_request_once',
       'conflict_event_once',
       'conflict_request_once',
-      'same_song_two_requests',
+      'same_song_duplicate_blocked',
       'gift_request_absent',
       'rollback_event_absent',
       'rollback_request_absent',

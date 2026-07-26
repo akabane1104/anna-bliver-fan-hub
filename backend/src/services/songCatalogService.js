@@ -1,6 +1,14 @@
 const database = require('../config/database');
 const { normalizeSongText } = require('../utils/songText');
 const { SongRequestError } = require('../utils/songRequestError');
+const {
+  activeActivityTag,
+  getQueueMetrics,
+  loadPolicySettings,
+  settingsProjection,
+  taipeiDayBounds
+} = require('./songRequestPolicyService');
+const { reasonMessage } = require('./songRequestCanonical');
 
 async function resolveSitePlaylist(queryable) {
   const [settings] = await queryable.query(
@@ -118,6 +126,122 @@ function publicCatalogSong(song) {
   };
 }
 
+async function loadAvailability(queryable, playlistId, songIds) {
+  if (!songIds.length) return new Map();
+  const settings = await loadPolicySettings(queryable);
+  const config = settingsProjection(settings);
+  const [sessions] = await queryable.query(
+    `SELECT id
+     FROM live_sessions
+     WHERE playlist_id = ? AND status = 'open'
+     ORDER BY COALESCE(started_at, created_at) DESC, id DESC
+     LIMIT 1`,
+    [playlistId]
+  );
+  const sessionId = sessions[0]?.id || null;
+  const metrics = await getQueueMetrics(queryable, sessionId, settings);
+  const [policies] = await queryable.query(
+    `SELECT song_id, temporarily_blocked, public_reason, blocked_until,
+            special_event_tag_id
+     FROM song_request_policies
+     WHERE song_id IN (${songIds.map(() => '?').join(',')})`,
+    songIds
+  );
+  const [queued] = sessionId
+    ? await queryable.query(
+      `SELECT DISTINCT matched_song_id
+       FROM song_requests
+       WHERE session_id = ? AND matched_song_id IS NOT NULL
+          AND status IN ('queued','active')`,
+      [sessionId]
+    )
+    : [[]];
+  const cooldownSince = new Date(
+    Date.now() - (config.cooldown_minutes * 60 * 1000)
+  ).toISOString().slice(0, 23).replace('T', ' ');
+  const [recent] = await queryable.query(
+    `SELECT matched_song_id, MAX(completed_at) AS completed_at
+     FROM song_requests
+     WHERE matched_song_id IN (${songIds.map(() => '?').join(',')})
+       AND status = 'completed' AND completed_at >= ?
+     GROUP BY matched_song_id`,
+    [...songIds, cooldownSince]
+  );
+  const bounds = taipeiDayBounds();
+  const [today] = await queryable.query(
+    `SELECT DISTINCT matched_song_id
+     FROM song_requests
+     WHERE matched_song_id IN (${songIds.map(() => '?').join(',')})
+       AND status = 'completed'
+       AND completed_at >= ? AND completed_at < ?`,
+    [...songIds, bounds.start, bounds.end]
+  );
+  const policiesBySong = new Map(
+    policies.map((row) => [Number(row.song_id), row])
+  );
+  const queuedIds = new Set(queued.map((row) => Number(row.matched_song_id)));
+  const recentBySong = new Map(
+    recent.map((row) => [Number(row.matched_song_id), row.completed_at])
+  );
+  const todayIds = new Set(today.map((row) => Number(row.matched_song_id)));
+  const activeTagId = activeActivityTag(settings);
+  const effectiveOpen = Boolean(
+    sessionId && config.manual_open && !config.auto_capacity_blocked
+  );
+  const result = new Map();
+  for (const songId of songIds) {
+    const policy = policiesBySong.get(Number(songId));
+    const blockedUntil = policy?.blocked_until
+      ? new Date(policy.blocked_until).getTime()
+      : null;
+    const temporarilyBlocked = Boolean(
+      policy?.temporarily_blocked
+      && (!blockedUntil || blockedUntil > Date.now())
+    );
+    const specialEventOnly = Boolean(
+      policy?.special_event_tag_id
+      && Number(policy.special_event_tag_id) !== Number(activeTagId)
+    );
+    let reasonCode = null;
+    if (!effectiveOpen) {
+      reasonCode = config.auto_capacity_blocked
+        ? 'queue_capacity_reached'
+        : 'requests_closed';
+    } else if (temporarilyBlocked) reasonCode = 'song_temporarily_blocked';
+    else if (specialEventOnly) reasonCode = 'special_event_only';
+    else if (queuedIds.has(Number(songId))) reasonCode = 'duplicate_in_queue';
+    else if (recentBySong.has(Number(songId))) reasonCode = 'song_cooldown';
+    else if (config.block_repeat_today && todayIds.has(Number(songId))) {
+      reasonCode = 'already_sung_today';
+    }
+    const completedAt = recentBySong.get(Number(songId));
+    result.set(Number(songId), {
+      requestable: !reasonCode,
+      reason_code: reasonCode,
+      public_reason: reasonCode
+        ? (policy?.public_reason || reasonMessage(reasonCode))
+        : null,
+      sung_today: todayIds.has(Number(songId)),
+      cooldown_until: completedAt
+        ? new Date(
+          new Date(completedAt).getTime() + (config.cooldown_minutes * 60 * 1000)
+        ).toISOString()
+        : null,
+      already_queued: queuedIds.has(Number(songId)),
+      temporarily_blocked: temporarilyBlocked,
+      special_event_only: specialEventOnly,
+      eta: {
+        paused: config.eta_paused,
+        min_minutes: metrics.max_eta_minutes,
+        max_minutes: metrics.max_eta_minutes + Math.ceil(
+          (config.default_duration_seconds + config.buffer_seconds) / 60
+        )
+      }
+    });
+  }
+  return result;
+}
+
 function createSongCatalogService({ pool = database } = {}) {
   return {
     async list({ query = '', tag = '', page = 1, limit = 100 } = {}) {
@@ -128,12 +252,21 @@ function createSongCatalogService({ pool = database } = {}) {
         (!tag || song.tags.some(({ name }) => name === tag))
       ));
       const start = (page - 1) * limit;
+      const pageSongs = filtered.slice(start, start + limit);
+      const availability = await loadAvailability(
+        pool,
+        playlist.id,
+        pageSongs.map(({ id }) => Number(id))
+      );
       return {
         playlist: {
           id: playlist.id,
           title: playlist.title
         },
-        songs: filtered.slice(start, start + limit).map(publicCatalogSong),
+        songs: pageSongs.map((song) => ({
+          ...publicCatalogSong(song),
+          availability: availability.get(Number(song.id))
+        })),
         pagination: {
           page,
           limit,
@@ -151,6 +284,7 @@ module.exports = {
   createSongCatalogService,
   defaultSongCatalogService,
   loadCatalog,
+  loadAvailability,
   matchesQuery,
   publicCatalogSong,
   resolveSitePlaylist

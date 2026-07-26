@@ -7,6 +7,7 @@ const {
   LEDGER_SQL,
   MIGRATION,
   MigrationError,
+  assertMigrationDataPreconditions,
   loadMigration,
   loadMigrations,
   readConfig
@@ -37,6 +38,10 @@ test('migration catalog discovers strict filenames in stable version order', () 
       {
         version: '202607240002',
         name: 'live_events_received_at_index'
+      },
+      {
+        version: '202607240003',
+        name: 'phase_4i_song_request_experience'
       }
     ]
   );
@@ -61,6 +66,22 @@ test('migration catalog discovers strict filenames in stable version order', () 
     unique: false,
     columns: ['received_at', 'id']
   }]);
+  assert.deepEqual(migrations[2].depends_on, [
+    '202607240001',
+    '202607240002'
+  ]);
+  assert.deepEqual(migrations[2].tables, [
+    'song_request_policies',
+    'song_request_details'
+  ]);
+  assert.deepEqual(
+    migrations[2].indexes.map(({ table, name }) => `${table}.${name}`),
+    [
+      'user_bilibili_bindings.unique_bound_open_id',
+      'song_aliases.unique_song_alias_normalized',
+      'song_aliases.unique_song_alias_script'
+    ]
+  );
 });
 
 test('migration discovery rejects invalid SQL filenames and missing contracts', (t) => {
@@ -105,13 +126,76 @@ test('forward migration is additive and creates exactly the five target tables',
   assert.doesNotMatch(sql, /\bINSERT\s+INTO\b/i);
 });
 
-test('contracts cover 22 legacy and five target tables', () => {
+test('Phase 4I migration remains additive and partial-rerun safe', () => {
+  const migration = loadMigrations()[2];
+  assert.doesNotMatch(
+    migration.sql,
+    /\b(?:DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM|REPLACE\s+INTO|ALTER\s+DATABASE)\b/i
+  );
+  assert.doesNotMatch(migration.sql, /ALTER\s+TABLE\s+song_requests\b/i);
+  assert.equal(
+    [...migration.sql.matchAll(/CREATE TABLE IF NOT EXISTS\s+([a-z0-9_]+)/gi)]
+      .map((match) => match[1])
+      .join(','),
+    migration.tables.join(',')
+  );
+  assert.equal(
+    (migration.sql.match(/FROM information_schema\.(?:COLUMNS|STATISTICS)/g) || []).length,
+    4
+  );
+  assert.equal(
+    (migration.sql.match(/PREPARE phase4i_statement FROM @phase4i_sql/g) || []).length,
+    4
+  );
+});
+
+test('Phase 4I migration rejects cross-song alias collisions before DDL', async () => {
+  const migration = loadMigrations()[2];
+  const queries = [];
+  await assert.rejects(
+    assertMigrationDataPreconditions({
+      async query(sql) {
+        queries.push(sql);
+        if (queries.length === 1) return [[{ present: 1 }]];
+        return [[{ collision: 1 }]];
+      }
+    }, migration),
+    (error) => (
+      error instanceof MigrationError
+      && error.code === 'migration_song_alias_collision'
+      && error.details[0] === 'song_aliases.normalized_alias'
+    )
+  );
+  assert.equal(queries.length, 2);
+  assert.match(queries[1], /HAVING COUNT\(DISTINCT song_id\) > 1/);
+  assert.doesNotMatch(queries[1], /\b(?:ALTER|CREATE|DROP|UPDATE|DELETE|INSERT)\b/i);
+});
+
+test('Phase 4I migration permits a legacy preflight before song_aliases exists', async () => {
+  const migration = loadMigrations()[2];
+  const queries = [];
+  await assertMigrationDataPreconditions({
+    async query(sql) {
+      queries.push(sql);
+      return [[]];
+    }
+  }, migration);
+  assert.equal(queries.length, 1);
+  assert.match(queries[0], /information_schema\.TABLES/);
+});
+
+test('contracts cover 22 legacy and seven additive target tables', () => {
   assert.equal(legacyTables.length, 22);
   assert.equal(new Set(legacyTables).size, 22);
-  assert.deepEqual(Object.keys(targetContracts), MIGRATION.tables);
+  assert.deepEqual(Object.keys(targetContracts), [
+    ...MIGRATION.tables,
+    'song_request_policies',
+    'song_request_details'
+  ]);
   assert.deepEqual(Object.keys(migrationContracts), [
     '202607240001',
-    '202607240002'
+    '202607240002',
+    '202607240003'
   ]);
   assert.equal(ledgerContract.indexes.some(({ name }) => name === 'PRIMARY'), true);
 });

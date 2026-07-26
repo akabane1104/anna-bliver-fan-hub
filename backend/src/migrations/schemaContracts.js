@@ -223,6 +223,59 @@ const targetContracts = Object.freeze({
   ], [
     foreignKey('fk_song_alias_creator', ['created_by_user_id'], 'users', ['id'], 'SET NULL'),
     foreignKey('fk_song_alias_song', ['song_id'], 'songs', ['id'], 'CASCADE')
+  ]),
+
+  song_request_policies: table([
+    column('id', 'bigint unsigned', { auto_increment: true }),
+    column('song_id', 'int'),
+    column('temporarily_blocked', 'tinyint(1)', { default: 0 }),
+    textColumn('public_reason', 'varchar(200)', { nullable: true }),
+    textColumn('internal_note', 'varchar(500)', { nullable: true }),
+    column('blocked_until', 'datetime(3)', { nullable: true }),
+    column('released_at', 'datetime(3)', { nullable: true }),
+    column('special_event_tag_id', 'int', { nullable: true }),
+    column('duration_override_seconds', 'int unsigned', { nullable: true }),
+    column('created_by_user_id', 'int', { nullable: true }),
+    column('updated_by_user_id', 'int', { nullable: true }),
+    column('released_by_user_id', 'int', { nullable: true }),
+    column('version', 'int unsigned', { default: 0 }),
+    column('created_at', 'timestamp(3)', { default: 'CURRENT_TIMESTAMP(3)' }),
+    column('updated_at', 'timestamp(3)', {
+      default: 'CURRENT_TIMESTAMP(3)',
+      on_update: 'CURRENT_TIMESTAMP(3)'
+    })
+  ], [
+    index('PRIMARY', true, ['id']),
+    index('idx_song_request_policy_block', false, ['temporarily_blocked', 'blocked_until']),
+    index('idx_song_request_policy_creator', false, ['created_by_user_id']),
+    index('idx_song_request_policy_event_tag', false, ['special_event_tag_id']),
+    index('idx_song_request_policy_releaser', false, ['released_by_user_id']),
+    index('idx_song_request_policy_updater', false, ['updated_by_user_id']),
+    index('unique_song_request_policy_song', true, ['song_id'])
+  ], [
+    foreignKey('fk_song_request_policy_creator', ['created_by_user_id'], 'users', ['id'], 'SET NULL'),
+    foreignKey('fk_song_request_policy_event_tag', ['special_event_tag_id'], 'tags', ['id'], 'SET NULL'),
+    foreignKey('fk_song_request_policy_releaser', ['released_by_user_id'], 'users', ['id'], 'SET NULL'),
+    foreignKey('fk_song_request_policy_song', ['song_id'], 'songs', ['id'], 'CASCADE'),
+    foreignKey('fk_song_request_policy_updater', ['updated_by_user_id'], 'users', ['id'], 'SET NULL')
+  ]),
+
+  song_request_details: table([
+    column('request_id', 'bigint unsigned'),
+    textColumn('canonical_match_method', 'varchar(32)'),
+    textColumn('reason_code', 'varchar(50)', { nullable: true }),
+    textColumn('public_reason', 'varchar(200)', { nullable: true }),
+    textColumn('internal_note', 'varchar(500)', { nullable: true }),
+    column('created_at', 'timestamp(3)', { default: 'CURRENT_TIMESTAMP(3)' }),
+    column('updated_at', 'timestamp(3)', {
+      default: 'CURRENT_TIMESTAMP(3)',
+      on_update: 'CURRENT_TIMESTAMP(3)'
+    })
+  ], [
+    index('PRIMARY', true, ['request_id']),
+    index('idx_song_request_detail_reason', false, ['reason_code', 'updated_at'])
+  ], [
+    foreignKey('fk_song_request_detail_request', ['request_id'], 'song_requests', ['id'], 'CASCADE')
   ])
 });
 
@@ -261,6 +314,32 @@ const migrationContracts = Object.freeze({
         name: 'idx_live_event_received',
         unique: false,
         columns: Object.freeze(['received_at', 'id'])
+      })
+    ])
+  }),
+  '202607240003': Object.freeze({
+    name: 'phase_4i_song_request_experience',
+    kind: 'tables_and_indexes',
+    depends_on: Object.freeze(['202607240001', '202607240002']),
+    tables: Object.freeze(['song_request_policies', 'song_request_details']),
+    indexes: Object.freeze([
+      Object.freeze({
+        table: 'user_bilibili_bindings',
+        name: 'unique_bound_open_id',
+        unique: true,
+        columns: Object.freeze(['bilibili_open_id'])
+      }),
+      Object.freeze({
+        table: 'song_aliases',
+        name: 'unique_song_alias_normalized',
+        unique: true,
+        columns: Object.freeze(['normalized_alias'])
+      }),
+      Object.freeze({
+        table: 'song_aliases',
+        name: 'unique_song_alias_script',
+        unique: true,
+        columns: Object.freeze(['script_key'])
       })
     ])
   })

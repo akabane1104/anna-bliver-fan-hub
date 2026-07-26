@@ -8,6 +8,18 @@ const {
 } = require('../src/utils/songText');
 const { matchSongCatalog } = require('../src/services/songMatcherService');
 const {
+  canonicalStatus,
+  maskDisplayName
+} = require('../src/services/songRequestCanonical');
+const {
+  calculateEta,
+  createSongRequestPolicyService,
+  loadPolicySettings,
+  lockUserAndBindings,
+  resolveCapacityBlocked,
+  taipeiDayBounds
+} = require('../src/services/songRequestPolicyService');
+const {
   canSetFulfillmentType,
   canTransitionRequest,
   canTransitionSession
@@ -180,6 +192,330 @@ test('fancy and FANCY remain case-sensitive and Fancy is never auto-selected', (
   assert.equal(upper.song.id, 2);
   assert.equal(mixed.kind, 'ambiguous');
   assert.deepEqual(mixed.candidates.map(({ id }) => id), [1, 2]);
+});
+
+test('canonical statuses and public names preserve legacy storage without identity leakage', () => {
+  assert.equal(canonicalStatus('observed'), 'pending_review');
+  assert.equal(canonicalStatus('needs_match'), 'pending_review');
+  assert.equal(canonicalStatus('active'), 'singing');
+  assert.equal(canonicalStatus('failed'), 'skipped');
+  assert.equal(canonicalStatus('cancelled'), 'withdrawn');
+  assert.equal(maskDisplayName('Synthetic Viewer'), 'S***r');
+  assert.equal(maskDisplayName('安'), '安***');
+});
+
+test('fuzzy matching has a safe length gate and a unique second-place gap', () => {
+  const catalog = {
+    songs: [
+      song(1, 'Synthetic Horizon'),
+      song(2, 'Synthetic Harbor')
+    ],
+    aliases: []
+  };
+  const matched = matchSongCatalog(catalog, 'Synthetic Horizom');
+  assert.equal(matched.kind, 'matched');
+  assert.equal(matched.match_method, 'fuzzy');
+  assert.equal(matched.song.id, 1);
+  assert.notEqual(matchSongCatalog({ songs: [song(1, 'abc')], aliases: [] }, 'abd').kind, 'matched');
+  assert.notEqual(
+    matchSongCatalog({
+      songs: [song(1, 'abcdefg1'), song(2, 'abcdefg2')],
+      aliases: []
+    }, 'abcdefg3').kind,
+    'matched'
+  );
+});
+
+test('ETA uses range output and Asia Taipei calendar boundaries', () => {
+  const eta = calculateEta([
+    {
+      public_id: 'active',
+      status: 'active',
+      matched_song_id: 1,
+      duration: '04:00',
+      duration_override_seconds: null
+    },
+    {
+      public_id: 'waiting',
+      status: 'queued',
+      matched_song_id: 2,
+      duration: null,
+      duration_override_seconds: 300
+    }
+  ], [], {
+    default_duration_seconds: 240,
+    buffer_seconds: 60,
+    eta_paused: false
+  });
+  assert.equal(eta.waiting_count, 1);
+  assert.deepEqual(eta.requests[1].eta, {
+    paused: false,
+    min_minutes: 4,
+    max_minutes: 6
+  });
+  assert.deepEqual(
+    taipeiDayBounds(new Date('2026-07-26T08:00:00.000Z')),
+    {
+      start: '2026-07-25 16:00:00.000',
+      end: '2026-07-26 16:00:00.000'
+    }
+  );
+});
+
+test('website identity lock requires a verified binding and one active request maximum', async () => {
+  const queries = [];
+  const connection = {
+    async query(sql) {
+      queries.push(sql);
+      if (sql.includes('FROM users')) {
+        return [[{ id: 42, username: 'Synthetic Viewer' }]];
+      }
+      if (sql.includes('FROM user_bilibili_bindings')) return [[{ id: 7 }]];
+      if (sql.includes('FROM song_requests')) return [[{ id: 9 }]];
+      throw new Error('unexpected query');
+    }
+  };
+  await assert.rejects(
+    lockUserAndBindings(connection, 42, { requireBinding: true }),
+    (error) => error.code === 'user_active_limit'
+  );
+  assert.equal(queries.every((sql) => /FOR UPDATE/.test(sql)), true);
+});
+
+test('capacity hysteresis uses strict ETA boundaries and stable song thresholds', () => {
+  const openConfig = {
+    auto_capacity_blocked: false,
+    queue_limit: 12,
+    reopen_threshold: 8,
+    eta_close_minutes: 60,
+    eta_reopen_minutes: 40
+  };
+  assert.equal(resolveCapacityBlocked(
+    { waiting_count: 12, max_eta_minutes: 40 },
+    openConfig
+  ), true);
+  assert.equal(resolveCapacityBlocked(
+    { waiting_count: 11, max_eta_minutes: 60 },
+    openConfig
+  ), false);
+  assert.equal(resolveCapacityBlocked(
+    { waiting_count: 11, max_eta_minutes: 61 },
+    openConfig
+  ), true);
+
+  const blockedConfig = { ...openConfig, auto_capacity_blocked: true };
+  assert.equal(resolveCapacityBlocked(
+    { waiting_count: 8, max_eta_minutes: 39 },
+    blockedConfig
+  ), false);
+  assert.equal(resolveCapacityBlocked(
+    { waiting_count: 8, max_eta_minutes: 40 },
+    blockedConfig
+  ), true);
+  assert.equal(resolveCapacityBlocked(
+    { waiting_count: 9, max_eta_minutes: 39 },
+    blockedConfig
+  ), true);
+});
+
+test('policy reads stay read-only and partial settings updates preserve omitted values', async () => {
+  const values = new Map([
+    ['song_request_cooldown_minutes', '90'],
+    ['song_request_block_repeat_today', 'true'],
+    ['song_request_queue_limit', '12'],
+    ['song_request_reopen_threshold', '8'],
+    ['song_request_eta_close_minutes', '60'],
+    ['song_request_eta_reopen_minutes', '40'],
+    ['song_request_default_duration_seconds', '240'],
+    ['song_request_buffer_seconds', '60'],
+    ['song_request_eta_paused', 'true'],
+    ['song_request_active_event_tag_id', '9'],
+    ['song_request_settings_revision', '0']
+  ]);
+  const query = async (sql, params = []) => {
+    if (/^SELECT setting_key, setting_value/.test(sql.trim())) {
+      return [[...values].map(([setting_key, setting_value]) => ({
+        setting_key,
+        setting_value
+      }))];
+    }
+    if (/^INSERT IGNORE INTO settings/.test(sql.trim())) {
+      if (!values.has(params[0])) values.set(params[0], String(params[1]));
+      return [{ affectedRows: 1 }];
+    }
+    if (/^UPDATE settings/.test(sql.trim())) {
+      if (params.length === 1) {
+        values.set(params[0], String(Number(values.get(params[0])) + 1));
+      } else {
+        values.set(params[1], params[0]);
+      }
+      return [{ affectedRows: 1 }];
+    }
+    throw new Error(`unexpected query: ${sql}`);
+  };
+  const readCalls = [];
+  await loadPolicySettings({
+    async query(sql, params) {
+      readCalls.push(sql);
+      return query(sql, params);
+    }
+  });
+  assert.equal(readCalls.length, 1);
+  assert.match(readCalls[0], /^SELECT setting_key, setting_value/);
+
+  const connection = {
+    query,
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {}
+  };
+  const service = createSongRequestPolicyService({
+    pool: {
+      query,
+      async getConnection() {
+        return connection;
+      }
+    }
+  });
+  const updated = await service.updateSettings({
+    queue_limit: 14,
+    reopen_threshold: 9,
+    max_eta_minutes: 70,
+    reopen_eta_minutes: 45,
+    default_song_seconds: 300,
+    buffer_seconds: 75,
+    expected_revision: 0
+  }, 42);
+  assert.equal(updated.cooldown_minutes, 90);
+  assert.equal(updated.block_repeat_today, true);
+  assert.equal(updated.eta_paused, true);
+  assert.equal(updated.active_event_tag_id, 9);
+  assert.equal(updated.queue_limit, 14);
+  assert.equal(updated.revision, 1);
+  const requestService = createSongRequestService({
+    pool: {},
+    policyService: service
+  });
+  assert.equal((await requestService.getPolicySettings()).revision, 1);
+  await assert.rejects(
+    service.updateSettings({
+      queue_limit: 15,
+      reopen_threshold: 9,
+      max_eta_minutes: 70,
+      reopen_eta_minutes: 45,
+      default_song_seconds: 300,
+      buffer_seconds: 75,
+      expected_revision: 0
+    }, 42),
+    (error) => error.code === 'version_conflict'
+  );
+});
+
+test('song policy partial updates preserve omitted fields and reject stale versions', async () => {
+  let policy = {
+    song_id: 7,
+    temporarily_blocked: 1,
+    public_reason: 'Temporary public reason',
+    internal_note: 'Private operator note',
+    blocked_until: new Date('2026-07-30T00:00:00.000Z'),
+    released_at: null,
+    special_event_tag_id: 9,
+    duration_override_seconds: 330,
+    version: 6
+  };
+  const connection = {
+    async beginTransaction() {},
+    async commit() {},
+    async rollback() {},
+    release() {},
+    async query(sql, params = []) {
+      if (/SELECT id FROM songs/.test(sql)) return [[{ id: 7 }]];
+      if (/FROM song_request_policies[\s\S]+FOR UPDATE/.test(sql)) return [[policy]];
+      if (/INSERT INTO song_request_policies/.test(sql)) {
+        policy = {
+          ...policy,
+          temporarily_blocked: params[1],
+          public_reason: params[2],
+          internal_note: params[3],
+          blocked_until: params[4],
+          special_event_tag_id: params[5],
+          duration_override_seconds: params[6],
+          version: policy.version + 1
+        };
+        return [{ affectedRows: 1 }];
+      }
+      throw new Error(`unexpected query: ${sql}`);
+    }
+  };
+  const service = createSongRequestPolicyService({
+    pool: {
+      async getConnection() {
+        return connection;
+      },
+      async query(sql) {
+        if (/FROM song_request_policies/.test(sql)) return [[policy]];
+        throw new Error(`unexpected query: ${sql}`);
+      }
+    }
+  });
+
+  const updated = await service.setPolicy(7, {
+    blocked: false,
+    public_reason: null,
+    expected_version: 6
+  }, 42);
+  assert.equal(updated.blocked, false);
+  assert.equal(updated.public_reason, null);
+  assert.equal(updated.internal_note, 'Private operator note');
+  assert.equal(updated.special_event_tag_id, 9);
+  assert.equal(updated.duration_override_seconds, 330);
+  assert.equal(updated.version, 7);
+  await assert.rejects(
+    service.setPolicy(7, {
+      blocked: true,
+      expected_version: 6
+    }, 42),
+    (error) => error.code === 'version_conflict'
+  );
+});
+
+test('rerequest preserves the original target for matched and unmatched history', async () => {
+  const service = createSongRequestService({
+    pool: {
+      async query() {
+        return [[{
+          id: 11,
+          public_id: '11111111-1111-4111-8111-111111111111',
+          requester_user_id: 42,
+          site_id: 'synthetic-site',
+          room_id: '10001',
+          status: 'rejected',
+          requested_title: 'Synthetic Song',
+          matched_song_id: null,
+          match_method: 'unmatched',
+          version: 1
+        }]];
+      }
+    },
+    policyService: {}
+  });
+  let captured = null;
+  service.createWebsiteRequest = async (input) => {
+    captured = input;
+    return { duplicate: false, request: { public_id: 'new-request' } };
+  };
+  await service.rerequest(
+    '11111111-1111-4111-8111-111111111111',
+    42,
+    'synthetic-rerequest-key'
+  );
+  assert.deepEqual(captured, {
+    site_id: 'synthetic-site',
+    room_id: '10001',
+    song_id: undefined,
+    query: 'Synthetic Song'
+  });
 });
 
 test('session and request state machines allow only documented transitions', () => {
@@ -425,6 +761,43 @@ test('live-control routes require authorization and expose no history mutation r
     method: 'DELETE'
   });
   assert.equal(historyMutation.status, 404);
+});
+
+test('catalog policy and alias writes require playlist permission', async (t) => {
+  let controllerCalls = 0;
+  const controller = new Proxy({}, {
+    get() {
+      return async (req, res) => {
+        void req;
+        controllerCalls += 1;
+        res.json({ status: 'accepted' });
+      };
+    }
+  });
+  const baseUrl = await createHarness(t, '/api/live-control', createLiveControlRouter({
+    controller,
+    authenticate: (req, res, next) => next(),
+    authorize: (req, res, next) => next(),
+    authorizeCatalog: (req, res) => res.status(403).json({ message: 'Permission denied' })
+  }));
+
+  const policy = await fetch(`${baseUrl}/songs/7/policy`);
+  assert.equal(policy.status, 403);
+  const aliasSavingMatch = await fetch(`${baseUrl}/requests/request-id/match`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ save_alias: true })
+  });
+  assert.equal(aliasSavingMatch.status, 403);
+  assert.equal(controllerCalls, 0);
+
+  const oneOffMatch = await fetch(`${baseUrl}/requests/request-id/match`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ save_alias: false })
+  });
+  assert.equal(oneOffMatch.status, 200);
+  assert.equal(controllerCalls, 1);
 });
 
 test('recoverable sessions route returns only the service-selected authority state', async (t) => {
