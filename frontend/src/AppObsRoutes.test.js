@@ -1,5 +1,7 @@
 import React, { act } from 'react';
 import { createRoot } from 'react-dom/client';
+import fs from 'node:fs';
+import path from 'node:path';
 const mockSources = [];
 
 jest.mock('./services/obsOverlayService', () => ({
@@ -42,6 +44,20 @@ jest.mock('./services', () => {
 const App = require('./App').default;
 const { hasObsRouteModeChanged, isObsOutputPath } = require('./utils/obsRoutePolicy');
 const flush = () => new Promise((resolve) => window.setTimeout(resolve, 0));
+const obsRoutes = [
+  '/obs',
+  '/obs/now-playing',
+  '/obs/next-song',
+  '/obs/song-queue',
+  '/obs/today-count',
+  '/obs/activity-progress',
+  '/obs/gift-ticker',
+  '/obs/guard-alert',
+  '/obs/cotton-candy',
+  '/obs/ai-bubble',
+  '/obs/notice',
+  '/obs/preview'
+];
 
 test('OBS output path policy is exact and crosses shells only at the route boundary', () => {
   expect(isObsOutputPath('/obs')).toBe(true);
@@ -61,20 +77,7 @@ test('every OBS route renders anonymously without the website shell', async () =
   global.IS_REACT_ACT_ENVIRONMENT = true;
 
   try {
-    for (const pathname of [
-      '/obs',
-      'now-playing',
-      'next-song',
-      'song-queue',
-      'today-count',
-      'activity-progress',
-      'gift-ticker',
-      'guard-alert',
-      'cotton-candy',
-      'ai-bubble',
-      'notice',
-      'preview'
-    ].map((route) => route.startsWith('/') ? route : `/obs/${route}`)) {
+    for (const pathname of obsRoutes) {
       window.history.replaceState(null, '', pathname);
       await act(async () => {
         root.render(<App />);
@@ -93,6 +96,59 @@ test('every OBS route renders anonymously without the website shell', async () =
   } finally {
     act(() => root.unmount());
     container.remove();
+  }
+});
+
+test('every OBS route keeps the actual viewport and route canvas transparent', async () => {
+  const styleElement = document.createElement('style');
+  styleElement.textContent = fs.readFileSync(
+    path.join(__dirname, 'pages', 'ObsOverlay.css'),
+    'utf8'
+  );
+  document.head.appendChild(styleElement);
+
+  const container = document.createElement('div');
+  container.id = 'root';
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+
+  try {
+    for (const pathname of obsRoutes) {
+      window.history.replaceState(null, '', pathname);
+      await act(async () => {
+        root.render(<App />);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        await flush();
+      });
+
+      const routeCanvas = container.querySelector('.obs-stage, .obs-preview');
+      expect(routeCanvas).not.toBeNull();
+      for (const element of [
+        document.documentElement,
+        document.body,
+        container,
+        routeCanvas
+      ]) {
+        const style = window.getComputedStyle(element);
+        expect(['transparent', 'rgba(0, 0, 0, 0)']).toContain(
+          style.backgroundColor
+        );
+        expect(['', 'none']).toContain(style.backgroundImage);
+      }
+
+      for (const previewFrame of container.querySelectorAll('.obs-preview-frame')) {
+        const style = window.getComputedStyle(previewFrame);
+        expect(['transparent', 'rgba(0, 0, 0, 0)']).toContain(
+          style.backgroundColor
+        );
+        expect(['', 'none']).toContain(style.backgroundImage);
+      }
+    }
+  } finally {
+    act(() => root.unmount());
+    container.remove();
+    styleElement.remove();
   }
 });
 

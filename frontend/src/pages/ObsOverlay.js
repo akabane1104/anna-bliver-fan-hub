@@ -247,12 +247,19 @@ function OverlayContent({ kind, state }) {
   return null;
 }
 
+function useTransparentObsCanvas() {
+  useEffect(() => {
+    const canvasRoots = [document.documentElement, document.body];
+    canvasRoots.forEach((element) => element.classList.add('obs-browser-source'));
+    return () => {
+      canvasRoots.forEach((element) => element.classList.remove('obs-browser-source'));
+    };
+  }, []);
+}
+
 function ObsOverlayRoute({ kind }) {
   const { state } = useObsOverlayState();
-  useEffect(() => {
-    document.body.classList.add('obs-browser-source');
-    return () => document.body.classList.remove('obs-browser-source');
-  }, []);
+  useTransparentObsCanvas();
   return (
     <div className={`obs-stage obs-stage-${kind}`}>
       <OverlayContent kind={kind} state={state} />
@@ -261,10 +268,7 @@ function ObsOverlayRoute({ kind }) {
 }
 
 function ObsOverlayPreview() {
-  useEffect(() => {
-    document.body.classList.add('obs-preview-mode');
-    return () => document.body.classList.remove('obs-preview-mode');
-  }, []);
+  useTransparentObsCanvas();
   return (
     <main className="obs-preview">
       <header>

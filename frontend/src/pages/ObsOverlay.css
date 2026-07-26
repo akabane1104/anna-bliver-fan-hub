@@ -1,12 +1,13 @@
+html.obs-browser-source,
+body.obs-browser-source,
+body.obs-browser-source #root {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
 body.obs-browser-source {
   margin: 0;
   overflow: hidden;
-  background: transparent !important;
-}
-
-body.obs-preview-mode {
-  margin: 0;
-  background: #101317;
 }
 
 .obs-stage {
@@ -429,7 +430,8 @@ body.obs-preview-mode {
   min-height: 0;
   padding: 20px;
   color: #ffffff;
-  background: #101317;
+  background-color: transparent;
+  background-image: none;
   font-family: "Microsoft YaHei", "Noto Sans SC", sans-serif;
 }
 
@@ -495,14 +497,8 @@ body.obs-preview-mode {
   overflow: hidden;
   border: 1px solid #30353d;
   border-radius: 6px;
-  background-color: #191d22;
-  background-image:
-    linear-gradient(45deg, #20252b 25%, transparent 25%),
-    linear-gradient(-45deg, #20252b 25%, transparent 25%),
-    linear-gradient(45deg, transparent 75%, #20252b 75%),
-    linear-gradient(-45deg, transparent 75%, #20252b 75%);
-  background-position: 0 0, 0 10px, 10px -10px, -10px 0;
-  background-size: 20px 20px;
+  background-color: transparent;
+  background-image: none;
 }
 
 .obs-preview-frame > section {
