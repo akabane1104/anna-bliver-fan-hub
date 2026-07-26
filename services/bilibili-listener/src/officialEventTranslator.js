@@ -2,7 +2,10 @@ const { listenerError } = require('./errors');
 
 const SUPPORTED_COMMANDS = Object.freeze({
   LIVE_OPEN_PLATFORM_DM: 'danmaku',
-  LIVE_OPEN_PLATFORM_SEND_GIFT: 'gift'
+  LIVE_OPEN_PLATFORM_SEND_GIFT: 'gift',
+  LIVE_OPEN_PLATFORM_LIVE_START: 'live_start',
+  LIVE_OPEN_PLATFORM_LIVE_END: 'live_end',
+  LIVE_OPEN_PLATFORM_GUARD: 'guard_buy'
 });
 const SOURCE_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 
@@ -78,6 +81,18 @@ function actorFromData(data) {
   });
 }
 
+function optionalText(value, options) {
+  if (value === undefined || value === null) return undefined;
+  return safeText(value, { ...options, minBytes: 0 });
+}
+
+function liveStateProviderEventId(kind, roomId, timestamp) {
+  return safeIdentifier(
+    `${kind.replace('_', '-')}:${roomId}:${timestamp}`,
+    'unstable_provider_event_id'
+  );
+}
+
 function comboFromData(data) {
   if (data?.combo_gift === undefined || data.combo_gift === false) {
     return Object.freeze({ combo_gift: false });
@@ -133,8 +148,13 @@ function translateOfficialCommand(message, {
     throw listenerError('invalid_official_event');
   }
   assertRoom(data, roomId);
-  const providerEventId = safeIdentifier(data.msg_id, 'unstable_provider_event_id');
   const occurredAt = timestampToIso(data.timestamp);
+  const providerEventId = ['live_start', 'live_end'].includes(kind)
+    ? liveStateProviderEventId(kind, roomId, data.timestamp)
+    : safeIdentifier(data.msg_id, 'unstable_provider_event_id');
+  const actor = ['live_start', 'live_end'].includes(kind)
+    ? null
+    : (kind === 'guard_buy' ? actorFromData(data.user_info) : actorFromData(data));
   const common = {
     provider: 'bilibili',
     provider_event_id: providerEventId,
@@ -142,7 +162,7 @@ function translateOfficialCommand(message, {
     session_id: safeIdentifier(gameId),
     occurred_at: occurredAt,
     received_at: occurredAt,
-    actor: actorFromData(data)
+    actor
   };
 
   if (kind === 'danmaku') {
@@ -155,6 +175,44 @@ function translateOfficialCommand(message, {
         data: Object.freeze({
           text: safeText(data.msg, { maxBytes: 1500 }),
           dm_type: dmType === 1 ? 'emoji' : 'text'
+        })
+      })
+    });
+  }
+
+  if (kind === 'live_start' || kind === 'live_end') {
+    const title = optionalText(data.title, { maxBytes: 600 });
+    const areaName = optionalText(data.area_name, { maxBytes: 300 });
+    return Object.freeze({
+      status: 'mapped',
+      sourceEvent: Object.freeze({
+        ...common,
+        kind,
+        data: Object.freeze({
+          ...(title === undefined ? {} : { title }),
+          ...(areaName === undefined ? {} : { area_name: areaName })
+        })
+      })
+    });
+  }
+
+  if (kind === 'guard_buy') {
+    return Object.freeze({
+      status: 'mapped',
+      sourceEvent: Object.freeze({
+        ...common,
+        kind,
+        data: Object.freeze({
+          guard_level: String(safeInteger(data.guard_level, {
+            min: 1,
+            max: 3
+          })),
+          guard_num: safeInteger(data.guard_num, {
+            min: 1,
+            max: 1000000
+          }),
+          guard_unit: safeText(data.guard_unit, { maxBytes: 90 }),
+          price: String(safeInteger(data.price))
         })
       })
     });
@@ -188,6 +246,8 @@ module.exports = {
   SUPPORTED_COMMANDS,
   actorFromData,
   comboFromData,
+  liveStateProviderEventId,
+  optionalText,
   safeIdentifier,
   timestampToIso,
   translateOfficialCommand

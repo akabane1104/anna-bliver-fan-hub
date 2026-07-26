@@ -1,6 +1,7 @@
 const database = require('../config/database');
 const { createContentHash } = require('../utils/canonicalJson');
 const { defaultSongRequestService } = require('./songRequestService');
+const { defaultLiveHomeService } = require('./liveHomeService');
 
 const INSERT_LIVE_EVENT_SQL = `
   INSERT INTO live_events (
@@ -111,10 +112,6 @@ async function recordWithRepository(event, repository, acceptedEventObserver) {
   const record = toLiveEventRecord(event);
   try {
     await repository.insert(record);
-    const observation = acceptedEventObserver
-      ? await acceptedEventObserver(event, { connection: repository.queryable })
-      : null;
-    return { status: 'accepted', contentHash: record.contentHash, observation };
   } catch (error) {
     if (error?.code !== 'ER_DUP_ENTRY') throw error;
     const existing = await repository.findByEventId(record.eventId);
@@ -128,6 +125,10 @@ async function recordWithRepository(event, repository, acceptedEventObserver) {
       contentHash: record.contentHash
     };
   }
+  const observation = acceptedEventObserver
+    ? await acceptedEventObserver(event, { connection: repository.queryable })
+    : null;
+  return { status: 'accepted', contentHash: record.contentHash, observation };
 }
 
 function createLiveEventService(options = {}) {
@@ -139,7 +140,11 @@ function createLiveEventService(options = {}) {
     ? options.acceptedEventObserver
     : (options.repository
       ? null
-      : defaultSongRequestService.observeAcceptedDanmaku.bind(defaultSongRequestService));
+      : async (event, context) => {
+        const liveState = await defaultLiveHomeService.observeAcceptedEvent(event, context);
+        const songRequest = await defaultSongRequestService.observeAcceptedDanmaku(event, context);
+        return event.event_type === 'danmaku' ? songRequest : liveState;
+      });
 
   return {
     async record(event) {

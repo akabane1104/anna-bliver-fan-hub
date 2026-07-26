@@ -162,7 +162,7 @@ const liveEventSchema = z.discriminatedUnion('event_type', [
     z.object({
       guard_level: z.enum(['1', '2', '3']),
       guard_num: z.number().int().min(1).max(1000000),
-      guard_unit: z.enum(['month', 'year']),
+      guard_unit: boundedText(30),
       price: integerString,
       price_unit: z.literal('bilibili_guard_price')
     }).strict()

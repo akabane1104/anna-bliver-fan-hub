@@ -14,12 +14,13 @@ const MAX_LIVE_EVENT_BODY_BYTES = 64 * 1024;
 function createLiveEventRouter({
   env = process.env,
   service = createLiveEventService(),
+  statusService,
   logger = console,
   now = Date.now
 } = {}) {
   const router = express.Router();
   const config = resolveLiveEventConfig(env);
-  const controller = createLiveEventController({ service, logger });
+  const controller = createLiveEventController({ service, statusService, logger });
   const rawJsonParser = express.raw({
     type: () => true,
     limit: MAX_LIVE_EVENT_BODY_BYTES,
@@ -33,6 +34,14 @@ function createLiveEventRouter({
     rawJsonParser,
     createLiveEventSignatureAuth({ now }),
     asyncHandler(controller.ingest)
+  );
+  router.post(
+    '/status',
+    createLiveEventAvailability(config),
+    requireServiceOnlyRequest,
+    rawJsonParser,
+    createLiveEventSignatureAuth({ now }),
+    asyncHandler(controller.status)
   );
 
   router.use((error, req, res, next) => {

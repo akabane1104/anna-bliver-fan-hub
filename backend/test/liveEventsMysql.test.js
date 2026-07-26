@@ -42,8 +42,20 @@ test('isolated MySQL validates live event idempotency and leaves legacy tables u
 }, async () => {
   const host = process.env.PHASE4B_TEST_DB_HOST;
   const port = Number(process.env.PHASE4B_TEST_DB_PORT);
-  if (host !== '127.0.0.1' || !Number.isInteger(port) || port <= 0 || port === 3306) {
-    throw new Error('Refusing integration test without an isolated loopback port other than 3306');
+  const internalDockerTarget = (
+    process.env.PHASE4B_TEST_DB_INTERNAL_NETWORK_CONFIRM ===
+      'phase4b-guid-internal-network' &&
+    /^afh4h-mysql-[a-f0-9]{12}$/.test(host) &&
+    port === 3306
+  );
+  const isolatedLoopbackTarget = (
+    host === '127.0.0.1' &&
+    Number.isInteger(port) &&
+    port > 0 &&
+    port !== 3306
+  );
+  if (!internalDockerTarget && !isolatedLoopbackTarget) {
+    throw new Error('Refusing integration test without an isolated loopback or GUID internal Docker target');
   }
 
   const pool = mysql.createPool({

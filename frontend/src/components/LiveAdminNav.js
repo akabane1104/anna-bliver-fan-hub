@@ -2,6 +2,7 @@ import React from 'react';
 import { NavLink } from 'react-router';
 
 const ITEMS = Object.freeze([
+  ['/admin/live-control', '直播中控'],
   ['/admin/live-status', '直播状态'],
   ['/admin/live-events', '事件记录'],
   ['/admin/song-requests', '点歌控制']

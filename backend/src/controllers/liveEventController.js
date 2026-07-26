@@ -1,6 +1,8 @@
 const { TextDecoder } = require('node:util');
 const { validateLiveEvent } = require('../schemas/liveEventSchema');
+const { listenerStatusReportSchema } = require('../schemas/liveHomeSchemas');
 const { isLiveEventTargetAllowed } = require('../utils/liveEventConfig');
+const { defaultLiveHomeService } = require('../services/liveHomeService');
 
 const utf8Decoder = new TextDecoder('utf-8', { fatal: true });
 
@@ -25,7 +27,12 @@ function auditMetadata(event) {
   };
 }
 
-function createLiveEventController({ service, logger = console, clock = () => process.hrtime.bigint() }) {
+function createLiveEventController({
+  service,
+  statusService = defaultLiveHomeService,
+  logger = console,
+  clock = () => process.hrtime.bigint()
+}) {
   return {
     async ingest(req, res) {
       const startedAt = clock();
@@ -81,6 +88,42 @@ function createLiveEventController({ service, logger = console, clock = () => pr
           duration_ms: Number(durationMs.toFixed(3))
         };
         writeAuditLog(logger, errorCode === 'database_error' ? 'error' : 'info', entry);
+      }
+    },
+
+    async status(req, res) {
+      try {
+        let parsed;
+        try {
+          parsed = JSON.parse(utf8Decoder.decode(req.liveEventRawBody));
+        } catch {
+          return res.status(400).json({ status: 'rejected', reason: 'invalid_json' });
+        }
+        const validation = listenerStatusReportSchema.safeParse(parsed);
+        if (!validation.success) {
+          return res.status(422).json({
+            status: 'rejected',
+            reason: 'invalid_listener_status'
+          });
+        }
+        const report = validation.data;
+        if (!isLiveEventTargetAllowed(req.liveEventConfig, report.site_id, report.room_id)) {
+          return res.status(403).json({ status: 'rejected', reason: 'target_not_allowed' });
+        }
+        const result = await statusService.recordTransportStatus(report);
+        return res.status(201).json(result);
+      } catch (error) {
+        const status = Number(error?.status);
+        if (status === 409) {
+          return res.status(409).json({
+            status: 'rejected',
+            reason: error.code || 'listener_status_conflict'
+          });
+        }
+        return res.status(500).json({
+          status: 'rejected',
+          reason: 'database_error'
+        });
       }
     }
   };

@@ -29,6 +29,7 @@ test('disabled service stays healthy without credentials or network access', asy
     path.join(os.tmpdir(), 'listener-disabled-')
   );
   let runtimeFactoryCalls = 0;
+  let statusReporterFactoryCalls = 0;
   let lockReleases = 0;
   try {
     await withNetworkGuard(async (networkCalls) => {
@@ -40,6 +41,10 @@ test('disabled service stays healthy without credentials or network access', asy
         runtimeFactory() {
           runtimeFactoryCalls += 1;
           throw new Error('active runtime must not be created');
+        },
+        statusReporterFactory() {
+          statusReporterFactoryCalls += 1;
+          throw new Error('status reporter must not be created');
         },
         async lockFactory() {
           return {
@@ -61,7 +66,124 @@ test('disabled service stays healthy without credentials or network access', asy
       assert.deepEqual(networkCalls, []);
     });
     assert.equal(runtimeFactoryCalls, 0);
+    assert.equal(statusReporterFactoryCalls, 0);
     assert.equal(lockReleases, 1);
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('enabled service reports its allowlisted transport snapshot without blocking health', async () => {
+  const dataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'listener-status-reporting-')
+  );
+  const reports = [];
+  let reporterFactoryCalls = 0;
+  try {
+    const service = createServiceRuntime({
+      env: {
+        LISTENER_DATA_DIR: dataDir,
+        BILIBILI_LISTENER_ENABLED: 'true',
+        BILIBILI_OFFICIAL_API_ENABLED: 'true',
+        BILIBILI_OFFICIAL_WSS_ENABLED: 'true',
+        LIVE_EVENT_INGEST_ENABLED: 'true',
+        BILIBILI_GIFT_AUTO_CREDIT_ENABLED: 'false'
+      },
+      async lockFactory() {
+        return { async release() {} };
+      },
+      statusReporterFactory() {
+        reporterFactoryCalls += 1;
+        return {
+          async report(value) {
+            reports.push(value);
+            return { outcome: 'accepted' };
+          }
+        };
+      },
+      runtimeFactory() {
+        return {
+          async start() {},
+          async stop() {},
+          snapshot() {
+            return {
+              state: 'connected',
+              degraded: false,
+              source: {
+                source_state: 'connected',
+                websocket_authenticated: true
+              }
+            };
+          }
+        };
+      },
+      setTimer() {
+        return 1;
+      },
+      clearTimer() {}
+    });
+    const started = await service.start();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(started.state, 'healthy');
+    assert.equal(reporterFactoryCalls, 1);
+    assert.equal(reports.length, 1);
+    assert.equal(reports[0].state, 'healthy');
+    assert.equal(reports[0].runtime.source.websocket_authenticated, true);
+    await service.stop();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('status reporting failures never escape into the service health lifecycle', async () => {
+  const dataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'listener-status-failure-')
+  );
+  try {
+    const service = createServiceRuntime({
+      env: {
+        LISTENER_DATA_DIR: dataDir,
+        BILIBILI_LISTENER_ENABLED: 'true',
+        BILIBILI_OFFICIAL_API_ENABLED: 'true',
+        BILIBILI_OFFICIAL_WSS_ENABLED: 'true',
+        LIVE_EVENT_INGEST_ENABLED: 'true',
+        BILIBILI_GIFT_AUTO_CREDIT_ENABLED: 'false'
+      },
+      async lockFactory() {
+        return { async release() {} };
+      },
+      statusReporterFactory() {
+        return {
+          report() {
+            throw new Error('synthetic status delivery failure');
+          }
+        };
+      },
+      runtimeFactory() {
+        return {
+          async start() {},
+          async stop() {},
+          snapshot() {
+            return {
+              state: 'connected',
+              degraded: false,
+              source: {
+                source_state: 'connected',
+                websocket_authenticated: true
+              }
+            };
+          }
+        };
+      },
+      setTimer() {
+        return 1;
+      },
+      clearTimer() {}
+    });
+    assert.equal((await service.start()).state, 'healthy');
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(service.snapshot().state, 'healthy');
+    await service.stop();
   } finally {
     fs.rmSync(dataDir, { recursive: true, force: true });
   }

@@ -10,6 +10,9 @@ const { acquireInstanceLock } = require('./instanceLock');
 const {
   createProductionRuntime
 } = require('./productionRuntime');
+const {
+  createStatusReporterFromEnv
+} = require('./statusReporter');
 
 function requireDataDirectory(env) {
   const dataDir = String(env.LISTENER_DATA_DIR || '').trim();
@@ -22,6 +25,7 @@ function requireDataDirectory(env) {
 function createServiceRuntime({
   env = process.env,
   runtimeFactory = createProductionRuntime,
+  statusReporterFactory = createStatusReporterFromEnv,
   lockFactory = acquireInstanceLock,
   clock = Date.now,
   setTimer = setTimeout,
@@ -33,6 +37,11 @@ function createServiceRuntime({
   let serviceConfig = null;
   let lock = null;
   let runtime = null;
+  let statusReporter = null;
+  let statusReportController = null;
+  let statusReportPromise = null;
+  let pendingStatusSnapshot = null;
+  let statusReportingActive = false;
   let healthTimer = null;
   let state = 'idle';
   let failureReason = null;
@@ -85,7 +94,41 @@ function createServiceRuntime({
     });
   };
 
-  const writeHealth = () => writeHealthSnapshot(dataDir, snapshot());
+  const pumpStatusReports = () => {
+    if (
+      !statusReportingActive ||
+      !statusReporter ||
+      statusReportPromise ||
+      !pendingStatusSnapshot
+    ) {
+      return;
+    }
+    const reportSnapshot = pendingStatusSnapshot;
+    pendingStatusSnapshot = null;
+    statusReportController = new AbortController();
+    statusReportPromise = Promise.resolve().then(() => (
+      statusReporter.report(reportSnapshot, {
+        signal: statusReportController.signal
+      })
+    ))
+      .catch(() => null)
+      .finally(() => {
+        statusReportController = null;
+        statusReportPromise = null;
+        pumpStatusReports();
+      });
+  };
+  const queueStatusReport = (value) => {
+    if (!statusReportingActive || state === 'stopped') return;
+    pendingStatusSnapshot = value;
+    pumpStatusReports();
+  };
+  const writeHealth = () => {
+    const value = snapshot();
+    writeHealthSnapshot(dataDir, value);
+    queueStatusReport(value);
+    return value;
+  };
   const scheduleHealth = () => {
     if (healthTimer !== null || state === 'stopped') return;
     healthTimer = setTimer(() => {
@@ -116,6 +159,27 @@ function createServiceRuntime({
         return snapshot();
       }
 
+      if (serviceConfig.backendIngestEnabled) {
+        try {
+          statusReporter = statusReporterFactory({
+            env,
+            clock,
+            setTimer,
+            clearTimer,
+            ...(runtimeOptions.fetchImpl
+              ? { fetchImpl: runtimeOptions.fetchImpl }
+              : {})
+          });
+          statusReportingActive = Boolean(
+            statusReporter &&
+            typeof statusReporter.report === 'function'
+          );
+        } catch {
+          statusReporter = null;
+          statusReportingActive = false;
+        }
+      }
+
       try {
         runtime = runtimeFactory({
           source: 'bilibili-official',
@@ -143,6 +207,10 @@ function createServiceRuntime({
         clearTimer(healthTimer);
         healthTimer = null;
       }
+      statusReportingActive = false;
+      pendingStatusSnapshot = null;
+      statusReportController?.abort();
+      await statusReportPromise;
       state = 'stopping';
       let stopError = null;
       try {

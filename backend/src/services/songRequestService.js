@@ -16,6 +16,33 @@ function toMysqlUtcDateTime(value = new Date()) {
   return new Date(value).toISOString().slice(0, 23).replace('T', ' ');
 }
 
+async function ensureSongRequestsOpenSetting(queryable) {
+  await queryable.query(
+    `INSERT IGNORE INTO settings (setting_key, setting_value)
+     VALUES ('live_home_song_requests_open', 'true')`
+  );
+}
+
+async function areSongRequestsOpen(queryable, { forUpdate = false } = {}) {
+  const [rows] = await queryable.query(
+    `SELECT setting_value
+     FROM settings
+     WHERE setting_key = 'live_home_song_requests_open'
+     LIMIT 1${forUpdate ? ' FOR UPDATE' : ''}`
+  );
+  return rows.length === 0 || rows[0].setting_value !== 'false';
+}
+
+async function assertSongRequestsOpen(queryable) {
+  if (!await areSongRequestsOpen(queryable, { forUpdate: true })) {
+    throw new SongRequestError(
+      409,
+      'song_requests_closed',
+      '当前直播已暂停接收点歌'
+    );
+  }
+}
+
 async function findOpenSessionForUpdate(connection, siteId, roomId) {
   const [rows] = await connection.query(
     `SELECT id, public_id, site_id, room_id, playlist_id, title, status, version
@@ -263,12 +290,28 @@ async function resolveWebsiteSessionForUpdate(connection, input) {
 }
 
 function createSongRequestService({ pool = database } = {}) {
+  let gateInitializationPromise = null;
+  const ensureGateSetting = async () => {
+    if (!gateInitializationPromise) {
+      gateInitializationPromise = ensureSongRequestsOpenSetting(pool)
+        .catch((error) => {
+          gateInitializationPromise = null;
+          throw error;
+        });
+    }
+    await gateInitializationPromise;
+  };
+
   const service = {
     async observeAcceptedDanmaku(event, { connection }) {
       if (event.event_type !== 'danmaku') return { status: 'ignored', reason: 'not_danmaku' };
       const command = parseSongRequestCommand(event.payload.text);
       if (!command.matched) return { status: 'ignored', reason: command.reason };
 
+      await ensureGateSetting();
+      if (!await areSongRequestsOpen(connection, { forUpdate: true })) {
+        return { status: 'ignored', reason: 'song_requests_closed' };
+      }
       const [existing] = await connection.query(
         'SELECT public_id FROM song_requests WHERE source_event_id = ? LIMIT 1',
         [event.event_id]
@@ -350,35 +393,41 @@ function createSongRequestService({ pool = database } = {}) {
         song_id: input.song_id || null,
         query: input.query || null
       });
+      await ensureGateSetting();
+      const findIdempotentRequest = async (queryable) => {
+        const [rows] = await queryable.query(
+          `SELECT public_id, idempotency_fingerprint
+           FROM song_requests
+           WHERE requester_user_id = ? AND idempotency_key = ?
+           LIMIT 1`,
+          [userId, idempotencyKey]
+        );
+        if (!rows.length) return null;
+        if (rows[0].idempotency_fingerprint !== fingerprint) {
+          throw new SongRequestError(
+            409,
+            'idempotency_key_conflict',
+            '该 Idempotency-Key 已用于另一条请求'
+          );
+        }
+        return {
+          duplicate: true,
+          request: await findRequestByPublicId(queryable, rows[0].public_id)
+        };
+      };
+      const existingBeforeTransaction = await findIdempotentRequest(pool);
+      if (existingBeforeTransaction) return existingBeforeTransaction;
       try {
         const result = await runInTransaction(pool, async (connection) => {
+          await assertSongRequestsOpen(connection);
           const [users] = await connection.query(
             'SELECT id, username FROM users WHERE id = ? LIMIT 1',
             [userId]
           );
           if (!users.length) throw new SongRequestError(401, 'user_not_found', '用户已不存在');
 
-          const [existing] = await connection.query(
-            `SELECT public_id, idempotency_fingerprint
-             FROM song_requests
-             WHERE requester_user_id = ? AND idempotency_key = ?
-             LIMIT 1`,
-            [userId, idempotencyKey]
-          );
-          if (existing.length) {
-            if (existing[0].idempotency_fingerprint !== fingerprint) {
-              throw new SongRequestError(
-                409,
-                'idempotency_key_conflict',
-                '该 Idempotency-Key 已用于另一条请求'
-              );
-            }
-            return {
-              duplicate: true,
-              request: await findRequestByPublicId(connection, existing[0].public_id)
-            };
-          }
-
+          const existing = await findIdempotentRequest(connection);
+          if (existing) return existing;
           const session = await resolveWebsiteSessionForUpdate(connection, input);
           if (!session) {
             throw new SongRequestError(409, 'no_open_session', '当前没有开放中的直播场次');
@@ -420,31 +469,17 @@ function createSongRequestService({ pool = database } = {}) {
         });
         return result;
       } catch (error) {
-        if (error?.code !== 'ER_DUP_ENTRY') throw error;
-        const [existing] = await pool.query(
-          `SELECT public_id, idempotency_fingerprint
-           FROM song_requests
-           WHERE requester_user_id = ? AND idempotency_key = ?
-           LIMIT 1`,
-          [userId, idempotencyKey]
-        );
-        if (!existing.length) throw error;
-        if (existing[0].idempotency_fingerprint !== fingerprint) {
-          throw new SongRequestError(
-            409,
-            'idempotency_key_conflict',
-            '该 Idempotency-Key 已用于另一条请求'
-          );
-        }
-        return {
-          duplicate: true,
-          request: await findRequestByPublicId(pool, existing[0].public_id)
-        };
+        if (!['ER_DUP_ENTRY', 'song_requests_closed'].includes(error?.code)) throw error;
+        const existing = await findIdempotentRequest(pool);
+        if (!existing) throw error;
+        return existing;
       }
     },
 
     async createManualRequest(input, actorUserId) {
+      await ensureGateSetting();
       return runInTransaction(pool, async (connection) => {
+        await assertSongRequestsOpen(connection);
         let session = null;
         if (input.session_public_id) {
           session = await findSessionByPublicId(connection, input.session_public_id, {
@@ -823,6 +858,119 @@ function createSongRequestService({ pool = database } = {}) {
       });
     },
 
+    async advanceCurrent(requestPublicId, input, actorUserId) {
+      return runInTransaction(pool, async (connection) => {
+        const request = await findRequestByPublicId(
+          connection,
+          requestPublicId,
+          { forUpdate: true }
+        );
+        if (!request) {
+          throw new SongRequestError(404, 'request_not_found', '点歌请求不存在');
+        }
+        assertExpectedVersion(request.version, input.expected_version);
+        if (request.status !== 'active') {
+          throw new SongRequestError(
+            409,
+            'request_not_active',
+            '只有当前正在处理的歌曲可以完成或跳过'
+          );
+        }
+        if (!request.session_id) {
+          throw new SongRequestError(
+            409,
+            'request_has_no_session',
+            '当前歌曲尚未归属直播场次'
+          );
+        }
+
+        const [sessions] = await connection.query(
+          `SELECT id, status
+           FROM live_sessions
+           WHERE id = ?
+           LIMIT 1
+           FOR UPDATE`,
+          [request.session_id]
+        );
+        if (!sessions.length || sessions[0].status === 'closed') {
+          throw new SongRequestError(
+            409,
+            'session_closed',
+            '已关闭的场次不能切换当前歌曲'
+          );
+        }
+
+        let next = null;
+        if (input.activate_next) {
+          const [nextRows] = await connection.query(
+            `SELECT public_id, id, status, version
+             FROM song_requests
+             WHERE session_id = ? AND status = 'queued'
+             ORDER BY queue_order, id
+             LIMIT 1
+             FOR UPDATE`,
+            [request.session_id]
+          );
+          next = nextRows[0] || null;
+        }
+
+        const completedAt = input.outcome === 'completed'
+          ? 'UTC_TIMESTAMP(3)'
+          : 'completed_at';
+        await connection.query(
+          `UPDATE song_requests
+           SET status = ?, fulfillment_type = ?, queue_order = NULL,
+               reason = ?, completed_at = ${completedAt},
+               version = version + 1
+           WHERE id = ?`,
+          [
+            input.outcome,
+            input.outcome === 'completed' ? 'sung' : request.fulfillment_type,
+            input.reason || null,
+            request.id
+          ]
+        );
+        await insertHistory(connection, {
+          requestId: request.id,
+          fromStatus: request.status,
+          toStatus: input.outcome,
+          action: `status_${input.outcome}`,
+          actorUserId,
+          reason: input.reason || null
+        });
+
+        if (next) {
+          await connection.query(
+            `UPDATE song_requests
+             SET status = 'active', queue_order = NULL,
+                 activated_at = UTC_TIMESTAMP(3), reason = NULL,
+                 version = version + 1
+             WHERE id = ?`,
+            [next.id]
+          );
+          await insertHistory(connection, {
+            requestId: next.id,
+            fromStatus: next.status,
+            toStatus: 'active',
+            action: 'status_active',
+            actorUserId,
+            metadata: { advanced_from_request_id: request.id }
+          });
+        }
+
+        await connection.query(
+          'UPDATE live_sessions SET version = version + 1 WHERE id = ?',
+          [request.session_id]
+        );
+        return {
+          previous: await findRequestByPublicId(connection, requestPublicId),
+          current: next
+            ? await findRequestByPublicId(connection, next.public_id)
+            : null
+        };
+      });
+    },
+
     async reorder(sessionPublicId, input, actorUserId) {
       return runInTransaction(pool, async (connection) => {
         const session = await findSessionByPublicId(connection, sessionPublicId, { forUpdate: true });
@@ -1174,8 +1322,11 @@ function createSongRequestService({ pool = database } = {}) {
 const defaultSongRequestService = createSongRequestService();
 
 module.exports = {
+  areSongRequestsOpen,
+  assertSongRequestsOpen,
   createSongRequestService,
   defaultSongRequestService,
+  ensureSongRequestsOpenSetting,
   findOpenSessionForUpdate,
   findRequestByPublicId,
   insertHistory,

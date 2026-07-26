@@ -106,6 +106,15 @@ Official Adapter 完成：
 最后 packet、最后成功投递、pending/quarantine 数量和 degraded reason，不包含
 credential 或事件 body。
 
+Phase 4H-A 在既有 normalized event pipeline 上增加官方
+`LIVE_OPEN_PLATFORM_LIVE_START`、`LIVE_OPEN_PLATFORM_LIVE_END` 与
+`LIVE_OPEN_PLATFORM_GUARD`。直播开始／结束只更新 Backend 的自动直播状态；
+Guard 只入既有 `live_events`、参与幂等与安全公开摘要，不会写入积分。Listener
+另以同一个 ingest HMAC 定期发送最小 transport 摘要，Backend 负责 30 秒 freshness
+与 90 秒 grace 判定；Docker healthy 或 WSS heartbeat 本身不会被解释为主播开播。
+事件名称与字段依 [B站直播开放平台事件文件](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)
+于 2026-07-26 核对；未知 CMD 仍明确忽略，不推测文件未记载的字段。
+
 Disabled 模式不会读取 B站凭据、不会建立 runtime、不会接触官方 REST/WSS，
 但进程和 healthcheck 正常运行，不形成 restart storm。
 

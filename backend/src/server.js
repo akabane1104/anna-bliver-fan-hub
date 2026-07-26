@@ -18,6 +18,7 @@ const pointsRoutes = require('./routes/points');
 const { createLiveEventRouter } = require('./routes/liveEvents');
 const { createSongRequestRouter } = require('./routes/songRequests');
 const { createLiveControlRouter } = require('./routes/liveControl');
+const { createLiveHomeRouter } = require('./routes/liveHome');
 const pointsService = require('./services/pointsService');
 const { startBotEventBridge } = require('./services/botEventBridge');
 
@@ -55,6 +56,7 @@ app.use('/api/bilibili-binding', bilibiliBindingRoutes);
 app.use('/api/permissions', permissionRoutes);
 app.use('/api/points', pointsRoutes);
 app.use('/api/song-requests', createSongRequestRouter());
+app.use('/api/live-home', createLiveHomeRouter());
 app.use('/api/live-control', createLiveControlRouter());
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok' }));

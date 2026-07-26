@@ -74,6 +74,7 @@ describe('Navbar live administration menu', () => {
     await renderNavbar();
     expect(container.textContent).not.toContain('直播管理');
     expect(container.querySelector('a[href="/admin/live-events"]')).toBeNull();
+    expect(container.querySelector('a[href="/admin/live-control"]')).toBeNull();
   });
 
   test('permission loading does not briefly reveal the menu', async () => {
@@ -82,12 +83,13 @@ describe('Navbar live administration menu', () => {
     expect(container.textContent).not.toContain('直播管理');
   });
 
-  test('admin or explicit permission sees all three existing live tools', async () => {
+  test('admin or explicit permission sees the live console and existing tools', async () => {
     mockPermissionService.getMyPermissions.mockResolvedValue({
       permissions: ['live_control.manage']
     });
     await renderNavbar();
     expect(container.textContent).toContain('直播管理');
+    expect(container.querySelector('a[href="/admin/live-control"]')).not.toBeNull();
     expect(container.querySelector('a[href="/admin/live-status"]')).not.toBeNull();
     expect(container.querySelector('a[href="/admin/live-events"]')).not.toBeNull();
     expect(container.querySelector('a[href="/admin/song-requests"]')).not.toBeNull();

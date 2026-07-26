@@ -103,6 +103,7 @@ export function requestErrorMessage(error, action = '操作') {
   if (status === 403) return '当前账号没有执行此操作的权限。';
   if (status === 409) {
     if (code === 'no_open_session') return '当前还没有开放点歌，请稍后再来。';
+    if (code === 'song_requests_closed') return '目前暂停接收点歌，请稍后再试。';
     if (code === 'idempotency_key_conflict') return '这次请求与先前操作冲突，请重新选择歌曲。';
     if (code === 'version_conflict' || code === 'active_request_exists') {
       return '队列刚刚发生变化，已为你重新加载。';

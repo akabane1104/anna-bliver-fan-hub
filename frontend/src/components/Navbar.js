@@ -77,6 +77,7 @@ function Navbar() {
                 <details className="navbar-admin-menu" ref={liveAdminMenuRef}>
                   <summary>直播管理</summary>
                   <div>
+                    <Link to="/admin/live-control" onClick={closeMenu}>直播中控</Link>
                     <Link to="/admin/live-status" onClick={closeMenu}>直播状态</Link>
                     <Link to="/admin/live-events" onClick={closeMenu}>事件记录</Link>
                     <Link to="/admin/song-requests" onClick={closeMenu}>点歌控制</Link>

@@ -12,6 +12,11 @@ function createLiveControlRouter({
   const router = express.Router();
   router.use(authenticate, authorize);
 
+  router.get('/home', asyncHandler(controller.liveHome));
+  router.put('/home/override', asyncHandler(controller.setLiveHomeOverride));
+  router.put('/home/song-requests', asyncHandler(controller.setSongRequestsOpen));
+  router.put('/home/activity', asyncHandler(controller.setLiveHomeActivity));
+  router.post('/home/requests/:publicId/advance', asyncHandler(controller.advanceCurrent));
   router.get('/status', asyncHandler(controller.liveStatus));
   router.get('/events', asyncHandler(controller.liveEvents));
   router.post('/sessions', asyncHandler(controller.createSession));

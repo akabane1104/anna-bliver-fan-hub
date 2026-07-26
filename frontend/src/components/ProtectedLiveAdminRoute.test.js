@@ -38,7 +38,7 @@ function TestRoutes({ path }) {
   );
 }
 
-describe('live status and event route guards', () => {
+describe('live administration route guards', () => {
   let container;
   let root;
 
@@ -68,6 +68,16 @@ describe('live status and event route guards', () => {
     await render('/admin/live-status');
     expect(container.textContent).toContain('login-page');
     expect(container.textContent).not.toContain('private-live-admin');
+  });
+
+  test('the live console direct URL uses the same permission boundary', async () => {
+    mockAuthService.isAuthenticated.mockReturnValue(true);
+    mockAuthService.getCurrentUser.mockReturnValue({ role: 'user' });
+    mockPermissionService.getMyPermissions.mockResolvedValue({
+      permissions: ['live_control.manage']
+    });
+    await render('/admin/live-control');
+    expect(container.textContent).toContain('private-live-admin');
   });
 
   test('permission loading never reveals admin content', async () => {

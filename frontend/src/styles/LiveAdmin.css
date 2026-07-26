@@ -556,6 +556,244 @@
   color: var(--text-light);
 }
 
+.live-control-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+}
+
+.live-control-panel {
+  min-width: 0;
+  padding: 1rem;
+  border: 1px solid var(--theme-border-soft);
+  border-radius: 8px;
+  background: var(--theme-card-surface);
+  box-shadow: var(--shadow);
+}
+
+.live-control-panel > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.8rem;
+}
+
+.live-control-panel > header > div {
+  display: grid;
+  min-width: 0;
+  gap: 0.18rem;
+}
+
+.live-control-panel > header span,
+.live-control-signal,
+.live-control-count {
+  color: var(--text-light);
+  font-size: 0.82rem;
+}
+
+.live-control-panel h2 {
+  margin: 0;
+  color: var(--dark-purple);
+  font-size: 1.2rem;
+}
+
+.live-control-signal {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.85rem;
+  margin: 0.85rem 0;
+  padding: 0.7rem 0;
+  border-block: 1px solid var(--theme-border-soft);
+}
+
+.live-control-expiry,
+.live-control-form label {
+  display: grid;
+  gap: 0.35rem;
+  color: var(--text-dark);
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.live-control-expiry select,
+.live-control-form input,
+.live-control-form textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.65rem 0.7rem;
+  border: 1px solid var(--theme-border-soft);
+  border-radius: 6px;
+  background: var(--theme-input-surface);
+  color: var(--text-dark);
+  font: inherit;
+}
+
+.live-control-segments {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.45rem;
+  margin-top: 0.8rem;
+}
+
+.live-control-segments button,
+.live-control-actions button,
+.live-control-form-actions button,
+.live-control-text-action {
+  min-height: 44px;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--theme-border-soft);
+  border-radius: 6px;
+  background: var(--theme-card-surface-alt);
+  color: var(--text-dark);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.live-control-segments button[aria-pressed="true"] {
+  border-color: var(--primary-purple);
+  background: var(--primary-purple);
+  color: var(--white);
+}
+
+.live-control-text-action {
+  width: 100%;
+  margin-top: 0.5rem;
+  border: 0;
+  background: transparent;
+  color: var(--primary-purple);
+}
+
+.live-control-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 44px;
+  cursor: pointer;
+}
+
+.live-control-toggle input {
+  width: 1.25rem;
+  height: 1.25rem;
+  accent-color: var(--primary-purple);
+}
+
+.live-control-song {
+  display: grid;
+  min-width: 0;
+  gap: 0.2rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid var(--theme-border-soft);
+}
+
+.live-control-song span {
+  color: var(--text-light);
+  font-size: 0.78rem;
+}
+
+.live-control-song strong {
+  overflow-wrap: anywhere;
+}
+
+.live-control-count {
+  margin: 0.7rem 0;
+}
+
+.live-control-waiting {
+  display: grid;
+  gap: 0.4rem;
+  max-height: 196px;
+  margin: 0 0 0.75rem;
+  padding: 0;
+  overflow-y: auto;
+  list-style: none;
+}
+
+.live-control-waiting li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.55rem;
+  align-items: center;
+  min-width: 0;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--theme-border-soft);
+  border-radius: 6px;
+  background: var(--theme-card-surface-alt);
+}
+
+.live-control-waiting li > span {
+  overflow: hidden;
+  color: var(--text-dark);
+  font-size: 0.84rem;
+  font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.live-control-waiting button {
+  min-height: 40px;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--primary-purple);
+  border-radius: 6px;
+  background: var(--theme-card-surface);
+  color: var(--primary-purple);
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.live-control-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+
+.live-control-actions button:hover:not(:disabled),
+.live-control-segments button:hover:not(:disabled),
+.live-control-form-actions button:hover:not(:disabled),
+.live-control-waiting button:hover:not(:disabled) {
+  border-color: var(--primary-purple);
+  box-shadow: 0 0 0 3px var(--theme-focus-ring);
+}
+
+.live-control-page button:disabled,
+.live-control-page input:disabled,
+.live-control-page select:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.live-control-activity,
+.live-control-preview {
+  margin-top: 1rem;
+}
+
+.live-control-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.75rem;
+  margin-top: 0.9rem;
+}
+
+.live-control-form-wide {
+  grid-column: 1 / -1;
+}
+
+.live-control-form textarea {
+  resize: vertical;
+}
+
+.live-control-form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+}
+
+.live-control-preview .live-home-card {
+  margin-top: 0.8rem;
+}
+
 @media (max-width: 1024px) {
   .navbar-admin-menu-item {
     width: min(320px, calc(100% - 2rem));
@@ -575,6 +813,10 @@
 
   .live-event-filters {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .live-control-grid {
+    grid-template-columns: 1fr;
   }
 }
 
@@ -603,7 +845,7 @@
 
   .live-admin-tabs {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .live-admin-tabs a {
@@ -678,6 +920,26 @@
     align-items: stretch;
     flex-direction: column;
     text-align: center;
+  }
+
+  .live-control-panel > header,
+  .live-control-form-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .live-control-segments,
+  .live-control-actions,
+  .live-control-form {
+    grid-template-columns: 1fr;
+  }
+
+  .live-control-form-wide {
+    grid-column: auto;
+  }
+
+  .live-control-form-actions button {
+    width: 100%;
   }
 }
 

@@ -152,10 +152,76 @@ function giftCommand({
   };
 }
 
+function liveStartCommand({
+  roomId = 123456,
+  timestamp = 1700000002,
+  title = 'synthetic live title',
+  areaName = 'synthetic area'
+} = {}) {
+  return {
+    cmd: 'LIVE_OPEN_PLATFORM_LIVE_START',
+    data: {
+      room_id: roomId,
+      timestamp,
+      area_name: areaName,
+      title
+    }
+  };
+}
+
+function liveEndCommand({
+  roomId = 123456,
+  timestamp = 1700000003,
+  title = 'synthetic live title',
+  areaName = 'synthetic area'
+} = {}) {
+  return {
+    cmd: 'LIVE_OPEN_PLATFORM_LIVE_END',
+    data: {
+      room_id: roomId,
+      timestamp,
+      area_name: areaName,
+      title
+    }
+  };
+}
+
+function guardCommand({
+  msgId = 'synthetic-guard-1',
+  roomId = 123456,
+  guardLevel = 3,
+  guardNum = 1,
+  guardUnit = '\u6708',
+  price = 198000
+} = {}) {
+  return {
+    cmd: 'LIVE_OPEN_PLATFORM_GUARD',
+    data: {
+      user_info: {
+        uid: 0,
+        open_id: 'synthetic-guard-open-id',
+        union_id: 'synthetic-guard-union-id',
+        uname: 'synthetic-guard-user',
+        uface: 'https://example.invalid/avatar.png'
+      },
+      guard_level: guardLevel,
+      guard_num: guardNum,
+      guard_unit: guardUnit,
+      price,
+      room_id: roomId,
+      msg_id: msgId,
+      timestamp: 1700000004
+    }
+  };
+}
+
 module.exports = {
   FakeWebSocket,
   danmakuCommand,
   giftCommand,
+  guardCommand,
+  liveEndCommand,
+  liveStartCommand,
   officialResponse,
   validStartData
 };

@@ -2,14 +2,16 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 
 export default function usePollingResource(loader, {
   intervalMs = 5000,
-  autoRefresh = true
+  autoRefresh = true,
+  staleAfterMs = null
 } = {}) {
   const [state, setState] = useState({
     data: null,
     error: null,
     loading: true,
     refreshing: false,
-    lastSuccessAt: null
+    lastSuccessAt: null,
+    stale: false
   });
   const executeRef = useRef(null);
 
@@ -18,12 +20,24 @@ export default function usePollingResource(loader, {
     let inFlight = false;
     let timer = null;
     let controller = null;
+    let latestData = null;
+    let lastSuccessAtMs = null;
 
     const clearScheduled = () => {
       if (timer !== null) {
         window.clearTimeout(timer);
         timer = null;
       }
+    };
+
+    const resolveInterval = () => {
+      const configured = typeof intervalMs === 'function'
+        ? intervalMs(latestData)
+        : intervalMs;
+      const numeric = Number(configured);
+      return Number.isFinite(numeric) && numeric >= 1000
+        ? Math.min(numeric, 300000)
+        : 5000;
     };
 
     const schedule = () => {
@@ -37,7 +51,7 @@ export default function usePollingResource(loader, {
       }
       timer = window.setTimeout(() => {
         execute('poll');
-      }, intervalMs);
+      }, resolveInterval());
     };
 
     const execute = async () => {
@@ -54,12 +68,15 @@ export default function usePollingResource(loader, {
       try {
         const data = await loader({ signal: controller.signal });
         if (!active) return false;
+        latestData = data;
+        lastSuccessAtMs = Date.now();
         setState({
           data,
           error: null,
           loading: false,
           refreshing: false,
-          lastSuccessAt: new Date().toISOString()
+          lastSuccessAt: new Date(lastSuccessAtMs).toISOString(),
+          stale: false
         });
         return true;
       } catch (error) {
@@ -70,7 +87,13 @@ export default function usePollingResource(loader, {
           ...current,
           error,
           loading: false,
-          refreshing: false
+          refreshing: false,
+          stale: (
+            Number.isFinite(staleAfterMs) &&
+            staleAfterMs >= 0 &&
+            lastSuccessAtMs !== null &&
+            Date.now() - lastSuccessAtMs >= staleAfterMs
+          )
         }));
         return false;
       } finally {
@@ -98,7 +121,7 @@ export default function usePollingResource(loader, {
       controller?.abort();
       document.removeEventListener('visibilitychange', handleVisibility);
     };
-  }, [autoRefresh, intervalMs, loader]);
+  }, [autoRefresh, intervalMs, loader, staleAfterMs]);
 
   const refresh = useCallback(() => executeRef.current?.('manual'), []);
 

@@ -1,13 +1,23 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { authService, bilibiliService, permissionService } from '../services';
+import LiveHomeCard from '../components/LiveHomeCard';
+import {
+  authService,
+  bilibiliService,
+  liveHomeService,
+  permissionService
+} from '../services';
 import { useSiteSettings } from '../context/SiteSettingsContext';
+import usePollingResource from '../utils/usePollingResource';
 
 const featureIcons = {
   playlists: '🎵', marshmallows: '🍬', prizes: '🎁',
   siteConfig: '🎨', pointsAdmin: '⭐', prizesAdmin: '🎁',
-  ordersAdmin: '📋', permissions: '🔐', songControl: '🎙️'
+  ordersAdmin: '📋', permissions: '🔐', songControl: '🎙️',
+  liveControl: '🎛️'
 };
+
+const liveHomeInterval = (data) => data?.refresh_after_ms || 30000;
 
 function Home() {
   const { siteSettings } = useSiteSettings();
@@ -17,6 +27,14 @@ function Home() {
   const isAuthenticated = authService.isAuthenticated();
   const isAdmin = isAuthenticated && currentUser?.role === 'admin';
   const canManage = (permission) => isAdmin || permissions.includes(permission);
+  const loadLiveHome = useCallback(
+    ({ signal }) => liveHomeService.getHome({ signal }),
+    []
+  );
+  const liveHome = usePollingResource(loadLiveHome, {
+    intervalMs: liveHomeInterval,
+    staleAfterMs: 90000
+  });
 
   useEffect(() => {
     if (!siteSettings.bilibiliUid) {
@@ -47,6 +65,7 @@ function Home() {
       { key: 'ordersAdmin', to: '/admin/prize-orders', title: '兑换订单管理', description: '处理兑换订单、收货信息和退款状态。', admin: true }
     ] : []),
     ...(canManage(permissionService.PERMISSIONS.LIVE_CONTROL_MANAGE) ? [
+      { key: 'liveControl', to: '/admin/live-control', title: '直播中控', description: '控制直播首页、点歌开关和当前演唱进度。', admin: true },
       { key: 'songControl', to: '/admin/song-requests', title: '点歌控制', description: '管理统一点歌队列、场次和历史记录。', admin: true }
     ] : []),
     ...(isAdmin ? [{ key: 'permissions', to: '/admin/permissions', title: '权限管理', description: '管理用户角色、功能权限和注册开关。', admin: true }] : [])
@@ -54,6 +73,7 @@ function Home() {
 
   return (
     <div className="container">
+      {!liveHome.stale && <LiveHomeCard data={liveHome.data} />}
       <section className="home-intro home-intro-original">
         {biliInfo && <a className="bili-profile-link" href={`https://space.bilibili.com/${biliInfo.mid}`} target="_blank" rel="noopener noreferrer">
           <div className="bili-profile-card">

@@ -25,13 +25,16 @@ const songRequestService = {
     return response.data;
   },
 
-  async getRecoverableSessions() {
-    const response = await api.get('/live-control/sessions/recoverable');
+  async getRecoverableSessions({ signal } = {}) {
+    const response = await api.get('/live-control/sessions/recoverable', { signal });
     return response.data;
   },
 
-  async getSessionRequests(publicId) {
-    const response = await api.get(`/live-control/sessions/${publicId}/requests`);
+  async getSessionRequests(publicId, { signal } = {}) {
+    const response = await api.get(
+      `/live-control/sessions/${publicId}/requests`,
+      { signal }
+    );
     return response.data;
   },
 

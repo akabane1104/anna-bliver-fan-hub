@@ -4,15 +4,22 @@ import usePollingResource from './usePollingResource';
 
 const flush = () => Promise.resolve();
 
-function Harness({ loader, autoRefresh = true }) {
+function Harness({
+  loader,
+  autoRefresh = true,
+  intervalMs = 5000,
+  staleAfterMs = null
+}) {
   const stableLoader = useCallback(loader, [loader]);
   const resource = usePollingResource(stableLoader, {
-    intervalMs: 5000,
-    autoRefresh
+    intervalMs,
+    autoRefresh,
+    staleAfterMs
   });
   return (
     <div>
       <span>{resource.data?.value || 'empty'}</span>
+      <span>{resource.stale ? 'stale' : 'fresh'}</span>
       <button type="button" onClick={resource.refresh}>refresh</button>
     </div>
   );
@@ -138,5 +145,72 @@ describe('usePollingResource', () => {
     act(() => root.unmount());
     expect(clearTimeoutSpy).toHaveBeenCalledWith(pollingTimer.id);
     root = createRoot(container);
+  });
+
+  test('uses the latest backend-provided polling interval', async () => {
+    const loader = jest.fn()
+      .mockResolvedValueOnce({ value: 'offline', refresh_after_ms: 30000 })
+      .mockResolvedValue({ value: 'live', refresh_after_ms: 5000 });
+    const interval = (data) => data?.refresh_after_ms || 30000;
+    await act(async () => {
+      root.render(<Harness loader={loader} intervalMs={interval} />);
+      await flush();
+      await flush();
+    });
+
+    await act(async () => {
+      jest.advanceTimersByTime(29999);
+      await flush();
+    });
+    expect(loader).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      jest.advanceTimersByTime(1);
+      await flush();
+      await flush();
+    });
+    expect(loader).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      jest.advanceTimersByTime(5000);
+      await flush();
+      await flush();
+    });
+    expect(loader).toHaveBeenCalledTimes(3);
+  });
+
+  test('keeps the last success during a brief failure and marks it stale later', async () => {
+    const loader = jest.fn()
+      .mockResolvedValueOnce({ value: 'last-known' })
+      .mockRejectedValue(new Error('offline'));
+    await act(async () => {
+      root.render(
+        <Harness
+          loader={loader}
+          intervalMs={5000}
+          staleAfterMs={6000}
+        />
+      );
+      await flush();
+      await flush();
+    });
+    expect(container.textContent).toContain('last-known');
+    expect(container.textContent).toContain('fresh');
+
+    await act(async () => {
+      jest.advanceTimersByTime(5000);
+      await flush();
+      await flush();
+    });
+    expect(container.textContent).toContain('last-known');
+    expect(container.textContent).toContain('fresh');
+
+    await act(async () => {
+      jest.advanceTimersByTime(5000);
+      await flush();
+      await flush();
+    });
+    expect(container.textContent).toContain('last-known');
+    expect(container.textContent).toContain('stale');
   });
 });

@@ -375,3 +375,4 @@ export { default as permissionService } from './permissionService';
 export { default as pointsService } from './pointsService';
 export { default as songRequestService } from './songRequestService';
 export { default as liveAdminService } from './liveAdminService';
+export { default as liveHomeService } from './liveHomeService';

@@ -15,6 +15,9 @@ const {
   FakeWebSocket,
   danmakuCommand,
   giftCommand,
+  guardCommand,
+  liveEndCommand,
+  liveStartCommand,
   officialResponse,
   validStartData
 } = require('./helpers/fakeOfficial');
@@ -151,14 +154,25 @@ test('official runtime completes REST/WSS lifecycle and durable delivery offline
       sockets[0].receive(messagePacket(giftCommand({
         msgId: 'synthetic-e2e-gift'
       })));
-      await waitFor(() => runtime.snapshot().accepted === 2);
+      sockets[0].receive(messagePacket(liveStartCommand()));
+      sockets[0].receive(messagePacket(guardCommand({
+        msgId: 'synthetic-e2e-guard'
+      })));
+      sockets[0].receive(messagePacket(liveEndCommand()));
+      await waitFor(() => runtime.snapshot().accepted === 5);
       sockets[0].receive(messagePacket(danmakuCommand({
         msgId: 'synthetic-e2e-dm',
         message: '点歌 年轮'
       })));
       await waitFor(() => runtime.snapshot().duplicate === 1);
       assert.equal(runtime.snapshot().spool.pending_count, 0);
-      assert.equal(accepted.size, 2);
+      assert.equal(accepted.size, 5);
+      assert.deepEqual(
+        new Set(
+          [...accepted.values()].map((body) => JSON.parse(body).event_type)
+        ),
+        new Set(['danmaku', 'gift', 'live_start', 'guard_buy', 'live_end'])
+      );
 
       await timers.advance(5000);
       await new Promise((resolve) => setImmediate(resolve));
@@ -181,7 +195,7 @@ test('official runtime completes REST/WSS lifecycle and durable delivery offline
       assert.equal(calls.start, 1);
       assert.equal(calls.heartbeat, 1);
       assert.equal(calls.end, 1);
-      assert.equal(calls.ingest, 3);
+      assert.equal(calls.ingest, 6);
       assert.deepEqual(networkCalls, []);
     });
   } finally {

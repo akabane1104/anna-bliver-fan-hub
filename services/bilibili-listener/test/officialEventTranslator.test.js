@@ -6,7 +6,10 @@ const {
 } = require('../src/officialEventTranslator');
 const {
   danmakuCommand,
-  giftCommand
+  giftCommand,
+  guardCommand,
+  liveEndCommand,
+  liveStartCommand
 } = require('./helpers/fakeOfficial');
 
 const target = {
@@ -68,6 +71,76 @@ test('official combo gifts retain bounded combo metadata without creating points
   );
   assert.deepEqual(mapped.event.payload.combo_info, command.data.combo_info);
   assert.equal(mapped.event.payload.points_status, 'not_processed');
+});
+
+test('official live start and end use stable identities without invented msg_id', () => {
+  for (const [command, eventType, expectedId] of [
+    [
+      liveStartCommand(),
+      'live_start',
+      'bilibili:123456:live-start:123456:1700000002'
+    ],
+    [
+      liveEndCommand(),
+      'live_end',
+      'bilibili:123456:live-end:123456:1700000003'
+    ]
+  ]) {
+    const source = translateOfficialCommand(command, target).sourceEvent;
+    const first = mapSourceEvent(source, listenerConfig);
+    const second = mapSourceEvent(
+      translateOfficialCommand(structuredClone(command), target).sourceEvent,
+      listenerConfig
+    );
+    assert.equal(first.status, 'mapped');
+    assert.equal(first.event.event_type, eventType);
+    assert.equal(first.event.event_id, expectedId);
+    assert.equal('message_id' in first.event.source, false);
+    assert.equal(first.event.actor, null);
+    assert.deepEqual(first.event.payload, {
+      title: 'synthetic live title',
+      area_name: 'synthetic area'
+    });
+    assert.deepEqual(first.event, second.event);
+  }
+});
+
+test('official guard maps nested actor and preserves bounded official units', () => {
+  const source = translateOfficialCommand(guardCommand(), target).sourceEvent;
+  const mapped = mapSourceEvent(source, listenerConfig);
+  assert.equal(mapped.status, 'mapped');
+  assert.equal(mapped.event.event_type, 'guard_buy');
+  assert.equal(mapped.event.source.cmd, 'LIVE_OPEN_PLATFORM_GUARD');
+  assert.equal(mapped.event.source.message_id, 'synthetic-guard-1');
+  assert.equal(mapped.event.actor.open_id, 'synthetic-guard-open-id');
+  assert.equal(mapped.event.actor.union_id, 'synthetic-guard-union-id');
+  assert.equal(mapped.event.actor.display_name, 'synthetic-guard-user');
+  assert.deepEqual(mapped.event.payload, {
+    guard_level: '3',
+    guard_num: 1,
+    guard_unit: '\u6708',
+    price: '198000',
+    price_unit: 'bilibili_guard_price'
+  });
+  assert.equal('points' in mapped.event.payload, false);
+});
+
+test('invalid official guard levels, quantities, and nested actors fail closed', () => {
+  const mutations = [
+    (data) => { data.guard_level = 0; },
+    (data) => { data.guard_level = 4; },
+    (data) => { data.guard_num = 0; },
+    (data) => { data.guard_unit = ''; },
+    (data) => { delete data.user_info.open_id; }
+  ];
+  for (const mutate of mutations) {
+    const command = guardCommand();
+    mutate(command.data);
+    assert.throws(
+      () => translateOfficialCommand(command, target),
+      { code: 'invalid_official_event' }
+    );
+  }
 });
 
 test('free gifts, duplicate IDs, uid zero, and equal display names remain safe', () => {

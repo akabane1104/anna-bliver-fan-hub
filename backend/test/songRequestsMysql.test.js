@@ -6,6 +6,7 @@ const {
   createMysqlLiveEventRepository
 } = require('../src/services/liveEventService');
 const { validateLiveEvent } = require('../src/schemas/liveEventSchema');
+const { createLiveHomeRepository } = require('../src/services/liveHomeService');
 const { createLiveSessionService } = require('../src/services/liveSessionService');
 const { matchSongInPlaylist } = require('../src/services/songMatcherService');
 const { createSongRequestService } = require('../src/services/songRequestService');
@@ -83,8 +84,20 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
 }, async () => {
   const host = process.env.PHASE4C_TEST_DB_HOST;
   const port = Number(process.env.PHASE4C_TEST_DB_PORT);
-  if (host !== '127.0.0.1' || !Number.isInteger(port) || port <= 0 || port === 3306) {
-    throw new Error('Refusing integration test without an isolated loopback port other than 3306');
+  const internalDockerTarget = (
+    process.env.PHASE4C_TEST_DB_INTERNAL_NETWORK_CONFIRM ===
+      'phase4c-guid-internal-network' &&
+    /^afh4h-mysql-[a-f0-9]{12}$/.test(host) &&
+    port === 3306
+  );
+  const isolatedLoopbackTarget = (
+    host === '127.0.0.1' &&
+    Number.isInteger(port) &&
+    port > 0 &&
+    port !== 3306
+  );
+  if (!internalDockerTarget && !isolatedLoopbackTarget) {
+    throw new Error('Refusing integration test without an isolated loopback or GUID internal Docker target');
   }
 
   const pool = mysql.createPool({
@@ -186,12 +199,17 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
       playlist_id: playlistId,
       title: 'Concurrent A'
     }, actorUserId);
-    const secondConcurrentDraft = await sessionService.createDraft({
-      site_id: 'phase4c-concurrency',
-      room_id: '10001',
-      playlist_id: playlistId,
-      title: 'Concurrent B'
-    }, actorUserId);
+    const secondConcurrentPublicId = '00000000-0000-4000-8000-000000000042';
+    await pool.query(
+      `INSERT INTO live_sessions (
+         public_id, site_id, room_id, playlist_id, title, status,
+         created_by_user_id
+       ) VALUES (?, 'phase4c-concurrency', '10001', ?, 'Concurrent B', 'draft', ?)`,
+      [secondConcurrentPublicId, playlistId, actorUserId]
+    );
+    const secondConcurrentDraft = await sessionService.getByPublicId(
+      secondConcurrentPublicId
+    );
     const activeResults = await Promise.allSettled([
       sessionService.transition(firstConcurrentDraft.public_id, 'open', 0),
       sessionService.transition(secondConcurrentDraft.public_id, 'open', 0)
@@ -704,6 +722,115 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
     assert.doesNotMatch(publicSerialized, /requester_open_id|requester_user_id|email/);
     assert.doesNotMatch(publicSerialized, /phase4c_synthetic_open_id_private/);
     assert.ok(publicQueue.requests.every(({ public_id }) => typeof public_id === 'string'));
+
+    const liveHomeQueue = await createLiveHomeRepository({
+      pool,
+      siteId: SITE_ID,
+      roomId: ROOM_ID
+    }).getQueue();
+    const expectedWaitingCount = afterActiveMix.requests
+      .filter(({ status }) => ['needs_match', 'queued'].includes(status))
+      .length;
+    assert.equal(liveHomeQueue.current.public_id, activated.public_id);
+    assert.equal(liveHomeQueue.waitingCount, expectedWaitingCount);
+    assert.equal(liveHomeQueue.waiting.length, expectedWaitingCount);
+    assert.equal(liveHomeQueue.next.public_id, liveHomeQueue.waiting[0].public_id);
+
+    const beforeAdvance = await requestService.getSessionRequests(session.public_id);
+    const activeBeforeAdvance = beforeAdvance.requests.find(({ status }) => status === 'active');
+    const queuedBeforeAdvance = beforeAdvance.requests.find(({ status }) => status === 'queued');
+    assert.ok(activeBeforeAdvance);
+    assert.ok(queuedBeforeAdvance);
+    const advanced = await requestService.advanceCurrent(
+      activeBeforeAdvance.public_id,
+      {
+        expected_version: activeBeforeAdvance.version,
+        outcome: 'completed',
+        activate_next: true
+      },
+      actorUserId
+    );
+    assert.equal(advanced.previous.status, 'completed');
+    assert.equal(advanced.previous.fulfillment_type, 'sung');
+    assert.equal(advanced.current.public_id, queuedBeforeAdvance.public_id);
+    assert.equal(advanced.current.status, 'active');
+
+    const concurrentAdvance = await Promise.allSettled([
+      requestService.advanceCurrent(
+        advanced.current.public_id,
+        {
+          expected_version: advanced.current.version,
+          outcome: 'completed',
+          activate_next: false
+        },
+        actorUserId
+      ),
+      requestService.advanceCurrent(
+        advanced.current.public_id,
+        {
+          expected_version: advanced.current.version,
+          outcome: 'skipped',
+          activate_next: false
+        },
+        actorUserId
+      )
+    ]);
+    assert.deepEqual(
+      concurrentAdvance.map(({ status }) => status).sort(),
+      ['fulfilled', 'rejected']
+    );
+    const [activeCountRows] = await pool.query(
+      `SELECT COUNT(*) AS count
+       FROM song_requests
+       WHERE session_id = (
+         SELECT id FROM live_sessions WHERE public_id = ?
+       ) AND status = 'active'`,
+      [session.public_id]
+    );
+    assert.equal(Number(activeCountRows[0].count), 0);
+
+    const [requestCountBeforeClose] = await pool.query(
+      'SELECT COUNT(*) AS count FROM song_requests'
+    );
+    await pool.query(
+      `INSERT INTO settings (setting_key, setting_value)
+       VALUES ('live_home_song_requests_open', 'false')
+       ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value)`
+    );
+    await expectServiceError(
+      requestService.createWebsiteRequest({
+        ...TARGET,
+        query: '年轮'
+      }, {
+        userId: actorUserId,
+        idempotencyKey: 'phase4c-closed-website'
+      }),
+      'song_requests_closed'
+    );
+    await expectServiceError(
+      requestService.createManualRequest({
+        ...TARGET,
+        query: '年轮'
+      }, actorUserId),
+      'song_requests_closed'
+    );
+    const closedDm = await liveService.record(
+      liveEvent(`${prefix}:closed-gate`, '点歌 年轮')
+    );
+    assert.equal(closedDm.status, 'accepted');
+    assert.equal(closedDm.observation.reason, 'song_requests_closed');
+    const [requestCountAfterClose] = await pool.query(
+      'SELECT COUNT(*) AS count FROM song_requests'
+    );
+    assert.equal(
+      Number(requestCountAfterClose[0].count),
+      Number(requestCountBeforeClose[0].count)
+    );
+    await pool.query(
+      `UPDATE settings
+       SET setting_value = 'true'
+       WHERE setting_key = 'live_home_song_requests_open'`
+    );
 
     const historyCount = await requestService.getHistoryCount(stateRequest.public_id);
     assert.ok(historyCount >= 4);

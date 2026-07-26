@@ -14,7 +14,14 @@ const {
   targetQuerySchema
 } = require('../schemas/songRequestSchemas');
 const { liveEventAdminQuerySchema } = require('../schemas/liveAdminSchemas');
+const {
+  liveHomeActivitySchema,
+  liveHomeAdvanceSchema,
+  liveHomeOverrideSchema,
+  songRequestOpenSchema
+} = require('../schemas/liveHomeSchemas');
 const { defaultLiveAdminService } = require('../services/liveAdminService');
+const { defaultLiveHomeService } = require('../services/liveHomeService');
 const { createLiveSessionService } = require('../services/liveSessionService');
 const {
   defaultSongRequestService
@@ -33,7 +40,8 @@ function requestId(req) {
 function createLiveControlController({
   sessionService = defaultLiveSessionService,
   requestService = defaultSongRequestService,
-  liveAdminService = defaultLiveAdminService
+  liveAdminService = defaultLiveAdminService,
+  liveHomeService = defaultLiveHomeService
 } = {}) {
   const transitionSession = (toStatus) => async (req, res) => {
     try {
@@ -68,6 +76,61 @@ function createLiveControlController({
   };
 
   return {
+    async liveHome(req, res) {
+      try {
+        return res.json(await liveHomeService.getAdminHome());
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async setLiveHomeOverride(req, res) {
+      try {
+        const input = parseOrThrow(liveHomeOverrideSchema, req.body);
+        return res.json(await liveHomeService.setOverride(input, req.userId));
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async setSongRequestsOpen(req, res) {
+      try {
+        const input = parseOrThrow(songRequestOpenSchema, req.body);
+        return res.json(await liveHomeService.setSongRequestsOpen(input.open, req.userId));
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async setLiveHomeActivity(req, res) {
+      try {
+        const input = parseOrThrow(liveHomeActivitySchema, req.body);
+        return res.json(await liveHomeService.setActivity(input, req.userId));
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
+    async advanceCurrent(req, res) {
+      try {
+        const input = parseOrThrow(liveHomeAdvanceSchema, req.body);
+        const result = await requestService.advanceCurrent(
+          requestId(req),
+          input,
+          req.userId
+        );
+        return res.json({
+          status: 'accepted',
+          previous: await requestService.getRequest(result.previous.public_id),
+          current: result.current
+            ? await requestService.getRequest(result.current.public_id)
+            : null
+        });
+      } catch (error) {
+        return sendSongRequestError(res, error);
+      }
+    },
+
     async liveStatus(req, res) {
       try {
         return res.json(await liveAdminService.getStatus());

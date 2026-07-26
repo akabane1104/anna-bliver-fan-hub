@@ -467,3 +467,29 @@ token；专用密钥缺失或不合格时，实际事件序列化入口安全失
 `event_ref`。状态页使用固定行数的 SQL 聚合；事件时间排序和最近事件查询由
 `(received_at, id)` 索引支持。完整契约与页面更新规则见
 [直播状态与事件记录后台](LIVE_STATUS_AND_EVENTS_UI.md)。
+
+## Phase 4H-A 直播首页与中控 API
+
+`GET /api/live-home` 是公开、只读且经过明确 DTO 清洗的聚合接口。它一次返回
+`offline`、`live` 或 `syncing` 模式、统一 `song_requests` 队列的 current／next／
+等待数、持久化点歌开关、有效的今日活动、最近五笔付费 Gift／Guard 安全摘要，
+以及由唯一 `LISTENER_ROOM_ID` 产生的直播间 URL。响应不包含平台身份、原始
+payload、Listener 内部错误或管理端 override 细节。
+
+以下接口继续使用既有网站认证与 `live_control.manage` 权限：
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /api/live-control/home` | 读取中控快照与安全 Listener 摘要 |
+| `PUT /api/live-control/home/override` | 设置 `auto`、`force_live` 或 `force_offline` |
+| `PUT /api/live-control/home/song-requests` | 持久化开放／关闭点歌 |
+| `PUT /api/live-control/home/activity` | 保存或清除最小今日活动 |
+| `POST /api/live-control/home/requests/:publicId/advance` | 事务内完成／跳过当前歌曲，并可切换下一首 |
+
+点歌开关由 Backend 中央 service 在网站、管理员代点与 B站 DM 三个建立入口共同
+强制执行；关闭不会清空既有 queue。current、next 与 queue count 始终来自既有
+`song_requests` 生命周期，不存在首页专用队列。
+
+Listener 的 `POST /api/internal/live-events/v1/status` 与事件 ingest 使用同一个
+service-only HMAC、timestamp skew 与 target allowlist。状态报告具有独立 UUID 与
+UTC 时间，重送或倒退报告会被拒绝；该接口不会公开 Listener `health.json`。
