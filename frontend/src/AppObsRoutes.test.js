@@ -44,8 +44,11 @@ jest.mock('./services', () => {
 const App = require('./App').default;
 const { hasObsRouteModeChanged, isObsOutputPath } = require('./utils/obsRoutePolicy');
 const flush = () => new Promise((resolve) => window.setTimeout(resolve, 0));
-const obsRoutes = [
+const obsUtilityRoutes = [
   '/obs',
+  '/obs/preview'
+];
+const obsOutputRoutes = [
   '/obs/now-playing',
   '/obs/next-song',
   '/obs/song-queue',
@@ -55,9 +58,9 @@ const obsRoutes = [
   '/obs/guard-alert',
   '/obs/cotton-candy',
   '/obs/ai-bubble',
-  '/obs/notice',
-  '/obs/preview'
+  '/obs/notice'
 ];
+const obsRoutes = [...obsUtilityRoutes, ...obsOutputRoutes];
 
 test('OBS output path policy is exact and crosses shells only at the route boundary', () => {
   expect(isObsOutputPath('/obs')).toBe(true);
@@ -147,6 +150,79 @@ test('every OBS route keeps the actual viewport and route canvas transparent', a
     }
   } finally {
     act(() => root.unmount());
+    container.remove();
+    styleElement.remove();
+  }
+});
+
+test('OBS utility previews scroll vertically while output routes stay scroll locked', async () => {
+  const styleElement = document.createElement('style');
+  styleElement.textContent = fs.readFileSync(
+    path.join(__dirname, 'pages', 'ObsOverlay.css'),
+    'utf8'
+  );
+  document.head.appendChild(styleElement);
+
+  const container = document.createElement('div');
+  container.id = 'root';
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  global.IS_REACT_ACT_ENVIRONMENT = true;
+  let mounted = true;
+
+  try {
+    for (const pathname of obsUtilityRoutes) {
+      window.history.replaceState(null, '', pathname);
+      await act(async () => {
+        root.render(<App />);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        await flush();
+      });
+
+      expect(document.documentElement.classList).toContain('obs-utility-preview');
+      expect(document.body.classList).toContain('obs-utility-preview');
+      for (const element of [
+        document.documentElement,
+        document.body,
+        container,
+        container.querySelector('.obs-preview'),
+        container.querySelector('.obs-preview-grid')
+      ]) {
+        const style = window.getComputedStyle(element);
+        expect(style.overflowX).toBe('hidden');
+        expect(style.overflowY).toBe('auto');
+      }
+    }
+
+    for (const pathname of obsOutputRoutes) {
+      window.history.replaceState(null, '', pathname);
+      await act(async () => {
+        root.render(<App />);
+        window.dispatchEvent(new PopStateEvent('popstate'));
+        await flush();
+      });
+
+      expect(document.documentElement.classList).toContain('obs-output-route');
+      expect(document.body.classList).toContain('obs-output-route');
+      for (const element of [
+        document.documentElement,
+        document.body,
+        container,
+        container.querySelector('.obs-stage')
+      ]) {
+        const style = window.getComputedStyle(element);
+        expect(style.overflow).toBe('hidden');
+      }
+    }
+
+    act(() => root.unmount());
+    mounted = false;
+    expect(document.documentElement.classList).not.toContain('obs-utility-preview');
+    expect(document.documentElement.classList).not.toContain('obs-output-route');
+    expect(document.body.classList).not.toContain('obs-utility-preview');
+    expect(document.body.classList).not.toContain('obs-output-route');
+  } finally {
+    if (mounted) act(() => root.unmount());
     container.remove();
     styleElement.remove();
   }

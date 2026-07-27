@@ -7,7 +7,21 @@ body.obs-browser-source #root {
 
 body.obs-browser-source {
   margin: 0;
+}
+
+html.obs-output-route,
+body.obs-output-route,
+body.obs-output-route #root {
   overflow: hidden;
+}
+
+html.obs-utility-preview,
+body.obs-utility-preview,
+body.obs-utility-preview #root,
+body.obs-utility-preview .obs-preview,
+body.obs-utility-preview .obs-preview-grid {
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 .obs-stage {
@@ -543,7 +557,7 @@ body.obs-browser-source {
     display: block;
     height: auto;
     min-height: 100vh;
-    padding: 20px;
+    padding: 20px 20px max(36px, calc(20px + env(safe-area-inset-bottom)));
   }
 
   .obs-preview > header { margin-bottom: 20px; }
