@@ -66,6 +66,10 @@ function schemaSql(database, { includeTargets }) {
     )
     .replace(/USE anna_bliver_fan_hub;/, `USE \`${database}\`;`);
   if (!includeTargets) {
+    sql = sql.replace(
+      "role ENUM('fan_club','captain','admiral','governor','streamer','admin') NOT NULL DEFAULT 'fan_club'",
+      "role ENUM('user','premium','admin') NOT NULL DEFAULT 'user'"
+    );
     for (const tableName of Object.keys(targetContracts)) {
       sql = sql.replace(extractCreateStatement(sql, tableName), '');
     }
@@ -74,6 +78,39 @@ function schemaSql(database, { includeTargets }) {
       .replace(/\s+UNIQUE KEY unique_bound_open_id[^\r\n]*\r?\n/, '\n')
       .replace(/\s+UNIQUE KEY unique_song_alias_normalized[^\r\n]*\r?\n/, '\n')
       .replace(/\s+UNIQUE KEY unique_song_alias_script[^\r\n]*\r?\n/, '\n');
+    for (const columnName of [
+      'target_anchor_uid',
+      'target_room_id',
+      'fans_medal_level',
+      'fans_medal_name',
+      'fans_medal_status',
+      'guard_level',
+      'guard_started_at',
+      'guard_expires_at',
+      'identity_sync_status',
+      'identity_source',
+      'last_sync_attempt_at',
+      'last_sync_success_at',
+      'last_sync_error_code',
+      'identity_observed_at',
+      'identity_version',
+      'sync_failure_count',
+      'next_sync_at',
+      'manual_role',
+      'manual_expires_at',
+      'manual_actor_user_id',
+      'manual_reason',
+      'manual_created_at',
+      'manual_overridden_at'
+    ]) {
+      sql = sql.replace(new RegExp(`\\s+${columnName} [^\\r\\n]*\\r?\\n`), '\n');
+    }
+    sql = sql
+      .replace(/\s+INDEX idx_binding_identity_due[^\r\n]*\r?\n/, '\n')
+      .replace(/\s+INDEX idx_binding_guard_expiry[^\r\n]*\r?\n/, '\n')
+      .replace(/\s+INDEX idx_binding_manual_expiry[^\r\n]*\r?\n/, '\n')
+      .replace(/\s+CONSTRAINT fk_binding_manual_actor[^\r\n]*\r?\n/, '\n')
+      .replace(/(CONSTRAINT fk_binding_user[^\r\n]*),\r?\n/, '$1\n');
   }
   return sql;
 }
@@ -120,8 +157,13 @@ async function tableCount(connection, tableName) {
 async function seedLegacyData(connection) {
   await connection.query(`
     INSERT INTO users (username, email, password, role)
-    VALUES ('r1-synthetic-user', 'r1-synthetic@example.com', 'synthetic-not-a-login', 'user');
-    SET @r1_user_id = LAST_INSERT_ID();
+    VALUES
+      ('r1-synthetic-user', 'r1-synthetic@example.com', 'synthetic-not-a-login', 'user'),
+      ('r1-synthetic-premium', 'r1-synthetic-premium@example.com', 'synthetic-not-a-login', 'premium'),
+      ('r1-synthetic-admin', 'r1-synthetic-admin@example.com', 'synthetic-not-a-login', 'admin');
+    SET @r1_user_id = (
+      SELECT id FROM users WHERE username = 'r1-synthetic-user'
+    );
     INSERT INTO permissions (user_id, permission_key)
     VALUES (@r1_user_id, 'synthetic.permission');
     SET @r1_playlist_id = (SELECT MIN(id) FROM playlists);
@@ -177,27 +219,101 @@ async function snapshotTableData(connection, database, tableNames) {
 async function snapshotLegacy(connection, database) {
   const structures = await inspectTables(connection, database, legacyTables);
   const rows = await snapshotTableData(connection, database, legacyTables);
-  return { structures, rows };
+  const [usersWithoutRole] = await connection.query(
+    `SELECT id, username, email, password, created_at
+     FROM users
+     ORDER BY id`
+  );
+  const [userRoles] = await connection.query(
+    'SELECT username, role FROM users ORDER BY username'
+  );
+  return { structures, rows, usersWithoutRole, userRoles };
 }
 
 function assertLegacyUpgradePreserved(before, after) {
-  assert.deepEqual(after.rows, before.rows);
+  for (const tableName of legacyTables.filter((name) => name !== 'users')) {
+    assert.deepEqual(after.rows[tableName], before.rows[tableName], tableName);
+  }
+  assert.deepEqual(after.usersWithoutRole, before.usersWithoutRole);
+  assert.deepEqual(after.userRoles, [
+    { username: 'r1-synthetic-admin', role: 'admin' },
+    { username: 'r1-synthetic-premium', role: 'streamer' },
+    { username: 'r1-synthetic-user', role: 'fan_club' }
+  ]);
   for (const tableName of legacyTables) {
-    if (tableName === 'user_bilibili_bindings') continue;
+    if (['users', 'user_bilibili_bindings'].includes(tableName)) continue;
     assert.deepEqual(after.structures[tableName], before.structures[tableName], tableName);
   }
 
+  const beforeUsers = before.structures.users;
+  const afterUsers = after.structures.users;
+  assert.deepEqual(
+    afterUsers.columns.filter(({ name }) => name !== 'role'),
+    beforeUsers.columns.filter(({ name }) => name !== 'role')
+  );
+  assert.deepEqual(afterUsers.indexes, beforeUsers.indexes);
+  assert.deepEqual(afterUsers.foreign_keys, beforeUsers.foreign_keys);
+  assert.equal(afterUsers.engine, beforeUsers.engine);
+  assert.equal(afterUsers.charset, beforeUsers.charset);
+  assert.equal(afterUsers.collation, beforeUsers.collation);
+  assert.deepEqual(
+    afterUsers.columns.find(({ name }) => name === 'role'),
+    {
+      ...beforeUsers.columns.find(({ name }) => name === 'role'),
+      name: 'role',
+      type: "enum('fan_club','captain','admiral','governor','streamer','admin')",
+      nullable: false,
+      default: 'fan_club'
+    }
+  );
+
   const beforeBindings = before.structures.user_bilibili_bindings;
   const afterBindings = after.structures.user_bilibili_bindings;
+  const addedBindingColumns = new Set([
+    'bilibili_open_id',
+    'target_anchor_uid',
+    'target_room_id',
+    'fans_medal_level',
+    'fans_medal_name',
+    'fans_medal_status',
+    'guard_level',
+    'guard_started_at',
+    'guard_expires_at',
+    'identity_sync_status',
+    'identity_source',
+    'last_sync_attempt_at',
+    'last_sync_success_at',
+    'last_sync_error_code',
+    'identity_observed_at',
+    'identity_version',
+    'sync_failure_count',
+    'next_sync_at',
+    'manual_role',
+    'manual_expires_at',
+    'manual_actor_user_id',
+    'manual_reason',
+    'manual_created_at',
+    'manual_overridden_at'
+  ]);
+  const addedBindingIndexes = new Set([
+    'unique_bound_open_id',
+    'idx_binding_identity_due',
+    'idx_binding_guard_expiry',
+    'idx_binding_manual_expiry',
+    'fk_binding_manual_actor'
+  ]);
   assert.deepEqual(
-    afterBindings.columns.filter(({ name }) => name !== 'bilibili_open_id'),
+    afterBindings.columns.filter(({ name }) => !addedBindingColumns.has(name)),
     beforeBindings.columns
   );
   assert.deepEqual(
-    afterBindings.indexes.filter(({ name }) => name !== 'unique_bound_open_id'),
+    afterBindings.indexes.filter(({ name }) => !addedBindingIndexes.has(name)),
     beforeBindings.indexes
   );
-  assert.deepEqual(afterBindings.foreign_keys, beforeBindings.foreign_keys);
+  assert.deepEqual(
+    afterBindings.foreign_keys.filter(({ name }) => name !== 'fk_binding_manual_actor'),
+    beforeBindings.foreign_keys
+  );
   assert.equal(afterBindings.engine, beforeBindings.engine);
   assert.equal(afterBindings.charset, beforeBindings.charset);
   assert.equal(afterBindings.collation, beforeBindings.collation);
@@ -384,7 +500,7 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           'live_events.idx_live_event_received'
         ]);
         assert.equal(runMigrationCli('postcheck', databases.fresh).applied, true);
-        assert.equal(await countAllTables(connection, databases.fresh), 31);
+        assert.equal(await countAllTables(connection, databases.fresh), 32);
         assert.deepEqual(await snapshotLegacy(connection, databases.fresh), before);
         freshStructures = await inspectTables(
           connection,
@@ -413,9 +529,12 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           'live_events.idx_live_event_received',
           'user_bilibili_bindings.unique_bound_open_id',
           'song_aliases.unique_song_alias_normalized',
-          'song_aliases.unique_song_alias_script'
+          'song_aliases.unique_song_alias_script',
+          'user_bilibili_bindings.idx_binding_identity_due',
+          'user_bilibili_bindings.idx_binding_guard_expiry',
+          'user_bilibili_bindings.idx_binding_manual_expiry'
         ]);
-        assert.equal(await countAllTables(connection, databases.existing), 31);
+        assert.equal(await countAllTables(connection, databases.existing), 32);
         existingAfter = await snapshotLegacy(connection, databases.existing);
         assertLegacyUpgradePreserved(existingBefore, existingAfter);
         upgradedStructures = await inspectTables(
@@ -435,14 +554,21 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
         assert.equal(runMigrationCli('status', databases.existing).applied, true);
         const result = runMigrationCli('apply', databases.existing);
         assert.equal(result.outcome, 'noop');
-        assert.equal(await tableCount(connection, 'schema_migrations'), 4);
+        assert.equal(await tableCount(connection, 'schema_migrations'), 6);
         assert.deepEqual(await snapshotLegacy(connection, databases.existing), before);
         const [ledgerRows] = await connection.query(
           'SELECT version FROM schema_migrations ORDER BY version'
         );
         assert.deepEqual(
           ledgerRows.map(({ version }) => version),
-          ['202607240001', '202607240002', '202607240003', '202607240004']
+          [
+            '202607240001',
+            '202607240002',
+            '202607240003',
+            '202607240004',
+            '202607240005',
+            '202607240006'
+          ]
         );
 
         const blocker = await connectDatabase(databases.existing);
@@ -575,9 +701,10 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           'song_aliases',
           'song_request_policies',
           'song_request_details',
-          'obs_overlay_events'
+          'obs_overlay_events',
+          'viewer_identity_audit'
         ]);
-        assert.equal(await countAllTables(connection, databases.partial), 31);
+        assert.equal(await countAllTables(connection, databases.partial), 32);
       } finally {
         await connection.end();
       }
@@ -659,7 +786,7 @@ test('isolated MySQL verifies ordered Phase 4B/4C and R4 index migration paths',
           ),
           targetDataBefore
         );
-        assert.equal(await tableCount(connection, 'schema_migrations'), 4);
+        assert.equal(await tableCount(connection, 'schema_migrations'), 6);
       } finally {
         await connection.end();
       }

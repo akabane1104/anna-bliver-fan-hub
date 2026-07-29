@@ -78,6 +78,7 @@ function loadMigrations({
       name,
       file,
       kind: contract.kind,
+      schema_change: contract.schema_change || null,
       depends_on: [...contract.depends_on],
       tables: [...contract.tables],
       indexes: contract.indexes.map((index) => ({
@@ -382,6 +383,7 @@ async function inspectMigrationState(connection, config, migration) {
     throw new MigrationError('migration_target_schema_incompatible', incompatible);
   }
   const indexStates = inspectIndexStates(migration, structures);
+  const schemaChangeState = await inspectSchemaChangeState(connection, migration);
   const ledgerRow = await readLedgerRow(connection, ledgerExists, migration);
   if (ledgerRow) {
     const missingTables = Object.entries(tableStates)
@@ -390,10 +392,16 @@ async function inspectMigrationState(connection, config, migration) {
     const missingIndexes = Object.entries(indexStates)
       .filter(([, value]) => !['compatible', 'equivalent'].includes(value.state))
       .map(([name]) => name);
-    if (missingTables.length || missingIndexes.length) {
+    const incompleteSchemaChange = schemaChangeState
+      && schemaChangeState.state !== 'compatible';
+    if (missingTables.length || missingIndexes.length || incompleteSchemaChange) {
       throw new MigrationError(
         'migration_applied_schema_incomplete',
-        [...missingTables, ...missingIndexes]
+        [
+          ...missingTables,
+          ...missingIndexes,
+          ...(incompleteSchemaChange ? [migration.schema_change] : [])
+        ]
       );
     }
   }
@@ -402,11 +410,165 @@ async function inspectMigrationState(connection, config, migration) {
     applied: Boolean(ledgerRow),
     table_states: tableStates,
     index_states: indexStates,
+    schema_change_state: schemaChangeState,
     structures
   };
 }
 
+const FINAL_ROLE_COLUMN_TYPE = "enum('fan_club','captain','admiral','governor','streamer','admin')";
+const KNOWN_MIGRATION_ROLES = Object.freeze([
+  'user',
+  'premium',
+  'admin',
+  'fan_club',
+  'captain',
+  'admiral',
+  'governor',
+  'streamer'
+]);
+
+const VIEWER_IDENTITY_COLUMNS = Object.freeze({
+  target_anchor_uid: Object.freeze({ type: 'bigint unsigned', nullable: 'YES', default: null }),
+  target_room_id: Object.freeze({ type: 'bigint unsigned', nullable: 'YES', default: null }),
+  fans_medal_level: Object.freeze({ type: 'int unsigned', nullable: 'YES', default: null }),
+  fans_medal_name: Object.freeze({ type: 'varchar(100)', nullable: 'YES', default: null }),
+  fans_medal_status: Object.freeze({
+    type: "enum('unknown','active','inactive')",
+    nullable: 'NO',
+    default: 'unknown'
+  }),
+  guard_level: Object.freeze({ type: 'tinyint unsigned', nullable: 'YES', default: null }),
+  guard_started_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null }),
+  guard_expires_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null }),
+  identity_sync_status: Object.freeze({
+    type: "enum('never','pending','success','failed','unavailable')",
+    nullable: 'NO',
+    default: 'never'
+  }),
+  identity_source: Object.freeze({
+    type: "enum('transient_qr','server_provider','official_listener','manual_fallback')",
+    nullable: 'YES',
+    default: null
+  }),
+  last_sync_attempt_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null }),
+  last_sync_success_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null }),
+  last_sync_error_code: Object.freeze({ type: 'varchar(64)', nullable: 'YES', default: null }),
+  identity_observed_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null }),
+  identity_version: Object.freeze({ type: 'bigint unsigned', nullable: 'NO', default: '0' }),
+  sync_failure_count: Object.freeze({ type: 'int unsigned', nullable: 'NO', default: '0' }),
+  next_sync_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null }),
+  manual_role: Object.freeze({
+    type: "enum('fan_club','captain','admiral','governor')",
+    nullable: 'YES',
+    default: null
+  }),
+  manual_expires_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null }),
+  manual_actor_user_id: Object.freeze({ type: 'int', nullable: 'YES', default: null }),
+  manual_reason: Object.freeze({ type: 'varchar(500)', nullable: 'YES', default: null }),
+  manual_created_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null }),
+  manual_overridden_at: Object.freeze({ type: 'datetime(3)', nullable: 'YES', default: null })
+});
+
+async function inspectSchemaChangeState(connection, migration) {
+  if (migration.schema_change === 'viewer_identity_sync') {
+    const [rows] = await connection.query(
+      `SELECT COLUMN_NAME AS column_name,
+              COLUMN_TYPE AS column_type,
+              COLUMN_DEFAULT AS column_default,
+              IS_NULLABLE AS is_nullable
+       FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'user_bilibili_bindings'
+         AND COLUMN_NAME IN (${Object.keys(VIEWER_IDENTITY_COLUMNS).map(() => '?').join(', ')})`,
+      Object.keys(VIEWER_IDENTITY_COLUMNS)
+    );
+    const byName = new Map(rows.map((row) => [row.column_name, row]));
+    const missing = Object.keys(VIEWER_IDENTITY_COLUMNS).filter((name) => !byName.has(name));
+    const incompatible = [];
+    for (const [name, expected] of Object.entries(VIEWER_IDENTITY_COLUMNS)) {
+      const row = byName.get(name);
+      if (!row) continue;
+      if (
+        String(row.column_type).toLowerCase() !== expected.type
+        || row.is_nullable !== expected.nullable
+        || String(row.column_default) !== String(expected.default)
+      ) {
+        incompatible.push(name);
+      }
+    }
+    if (incompatible.length) {
+      throw new MigrationError(
+        'migration_viewer_identity_columns_incompatible',
+        incompatible
+      );
+    }
+    const [foreignKeys] = await connection.query(
+      `SELECT DELETE_RULE AS delete_rule
+       FROM information_schema.REFERENTIAL_CONSTRAINTS
+       WHERE CONSTRAINT_SCHEMA = DATABASE()
+         AND TABLE_NAME = 'user_bilibili_bindings'
+         AND CONSTRAINT_NAME = 'fk_binding_manual_actor'`
+    );
+    if (foreignKeys.length && foreignKeys[0].delete_rule !== 'SET NULL') {
+      throw new MigrationError('migration_viewer_identity_foreign_key_incompatible');
+    }
+    return {
+      state: missing.length || !foreignKeys.length ? 'pending' : 'compatible',
+      missing_columns: missing,
+      manual_actor_foreign_key: foreignKeys.length === 1
+    };
+  }
+  if (migration.schema_change !== 'users_role') return null;
+  const [rows] = await connection.query(
+    `SELECT COLUMN_TYPE AS column_type,
+            COLUMN_DEFAULT AS column_default,
+            IS_NULLABLE AS is_nullable,
+            CHARACTER_SET_NAME AS character_set_name,
+            COLLATION_NAME AS collation_name
+     FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = DATABASE()
+       AND TABLE_NAME = 'users'
+       AND COLUMN_NAME = 'role'`
+  );
+  if (rows.length !== 1) {
+    throw new MigrationError('migration_users_role_column_missing');
+  }
+  const row = rows[0];
+  if (row.character_set_name !== 'utf8mb4'
+      || !/^utf8mb4_[a-z0-9_]+$/.test(String(row.collation_name || ''))) {
+    throw new MigrationError('migration_users_role_collation_incompatible');
+  }
+  const compatible = String(row.column_type).toLowerCase() === FINAL_ROLE_COLUMN_TYPE
+    && row.column_default === 'fan_club'
+    && row.is_nullable === 'NO';
+  return {
+    state: compatible ? 'compatible' : 'pending',
+    column_type: String(row.column_type).toLowerCase(),
+    column_default: row.column_default,
+    is_nullable: row.is_nullable,
+    character_set_name: row.character_set_name,
+    collation_name: row.collation_name
+  };
+}
+
 async function assertMigrationDataPreconditions(connection, migration) {
+  if (migration.schema_change === 'users_role') {
+    const placeholders = KNOWN_MIGRATION_ROLES.map(() => '?').join(', ');
+    const [unknownRoles] = await connection.query(
+      `SELECT role, COUNT(*) AS count
+       FROM users
+       WHERE role IS NULL OR role NOT IN (${placeholders})
+       GROUP BY role`,
+      KNOWN_MIGRATION_ROLES
+    );
+    if (unknownRoles.length) {
+      throw new MigrationError(
+        'migration_unknown_user_role',
+        unknownRoles.map((row) => `role=${row.role || 'null'} count=${row.count}`)
+      );
+    }
+    return;
+  }
   if (migration.version !== '202607240003') return;
   const [tables] = await connection.query(
     `SELECT 1 AS present
@@ -451,7 +613,8 @@ async function preflightOnConnection(connection, config, migration) {
     applied: state.applied,
     ledger_exists: state.ledger_exists,
     table_states: state.table_states,
-    index_states: state.index_states
+    index_states: state.index_states,
+    schema_change_state: state.schema_change_state
   };
 }
 
@@ -472,7 +635,8 @@ async function postcheckOnConnection(connection, config, migration) {
     database: identity,
     applied: true,
     table_states: state.table_states,
-    index_states: state.index_states
+    index_states: state.index_states,
+    schema_change_state: state.schema_change_state
   };
 }
 
@@ -508,7 +672,8 @@ async function applyOnConnection(connection, config, migration) {
   const missingIndexes = Object.entries(before.index_states)
     .filter(([, value]) => value.state === 'missing')
     .map(([name]) => name);
-  if (missingTables.length || missingIndexes.length) {
+  const pendingSchemaChange = before.schema_change_state?.state === 'pending';
+  if (missingTables.length || missingIndexes.length || pendingSchemaChange) {
     try {
       await connection.query(migration.sql);
     } catch (error) {
@@ -525,10 +690,16 @@ async function applyOnConnection(connection, config, migration) {
   const incompleteIndexes = Object.entries(afterDdl.index_states)
     .filter(([, value]) => !['compatible', 'equivalent'].includes(value.state))
     .map(([name]) => name);
-  if (incomplete.length || incompleteIndexes.length) {
+  const incompleteSchemaChange = afterDdl.schema_change_state
+    && afterDdl.schema_change_state.state !== 'compatible';
+  if (incomplete.length || incompleteIndexes.length || incompleteSchemaChange) {
     throw new MigrationError(
       'migration_postcheck_failed',
-      [...incomplete, ...incompleteIndexes]
+      [
+        ...incomplete,
+        ...incompleteIndexes,
+        ...(incompleteSchemaChange ? [migration.schema_change] : [])
+      ]
     );
   }
 
@@ -551,9 +722,12 @@ async function applyOnConnection(connection, config, migration) {
   return {
     ...verified,
     command: 'apply',
-    outcome: (missingTables.length || missingIndexes.length) ? 'applied' : 'adopted',
+    outcome: (missingTables.length || missingIndexes.length || pendingSchemaChange)
+      ? 'applied'
+      : 'adopted',
     created_tables: missingTables,
-    created_indexes: missingIndexes
+    created_indexes: missingIndexes,
+    applied_schema_changes: pendingSchemaChange ? [migration.schema_change] : []
   };
 }
 

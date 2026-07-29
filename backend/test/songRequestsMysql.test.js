@@ -119,7 +119,7 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
        WHERE table_schema = DATABASE()
        ORDER BY table_name`
     );
-    assert.equal(tableRows.length, 30);
+    assert.equal(tableRows.length, 31);
     const tableNames = new Set(tableRows.map((row) => row.TABLE_NAME || row.table_name));
     for (const name of [
       'live_events',
@@ -282,7 +282,7 @@ test('isolated MySQL validates unified song requests, transactions, ordering, an
     const prefix = `phase4c:${Date.now()}`;
     const [policyUserResult] = await pool.query(
       `INSERT INTO users (username, email, password, role)
-       VALUES (?, ?, 'synthetic-not-used', 'user')`,
+       VALUES (?, ?, 'synthetic-not-used', 'fan_club')`,
       [`phase4i-viewer-${Date.now()}`, `phase4i-${Date.now()}@example.com`]
     );
     const policyUserId = policyUserResult.insertId;

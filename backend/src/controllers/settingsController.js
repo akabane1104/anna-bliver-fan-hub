@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const { isCaptchaEnabled, isEmailVerificationEnabled } = require('../utils/optionalFeatures');
+const { isAdminRole } = require('../config/accessControl');
 
 const BRANDING_UPLOAD_DIRECTORY = path.join(__dirname, '..', '..', 'uploads', 'branding');
 const MAX_BRANDING_IMAGE_BYTES = 2 * 1024 * 1024;
@@ -140,6 +141,9 @@ exports.updateSiteConfig = async (req, res) => {
   try {
     const entries = Object.entries(req.body || {}).filter(([field]) => SITE_FIELDS[field]);
     if (!entries.length) return res.status(400).json({ message: 'No site configuration provided' });
+    if (entries.some(([field]) => field === 'bilibiliUid') && !isAdminRole(req.userRole)) {
+      return res.status(403).json({ message: '仅管理员可以修改目标主播 UID' });
+    }
     const normalizedEntries = entries.map(([field, value]) => [SITE_FIELDS[field][0], normalizeValue(field, value)]);
     connection = await db.getConnection();
     await connection.beginTransaction();

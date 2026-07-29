@@ -1,8 +1,18 @@
 const db = require('../config/database');
-const { PERMISSIONS } = require('../middleware/permissions');
+const {
+  PERMISSIONS,
+  ROLES,
+  ROLE_LABELS,
+  VIEWER_ROLES,
+  effectivePermissions,
+  isAdminRole,
+  isValidRole,
+  permissionsForRole
+} = require('../config/accessControl');
+const {
+  defaultViewerIdentityService
+} = require('../services/viewerIdentityService');
 const { positiveInt } = require('../utils/validation');
-
-const VALID_ROLES = new Set(['user', 'premium', 'admin']);
 
 const TYPES = [
   [PERMISSIONS.PLAYLIST_MANAGE, '歌单管理'],
@@ -14,16 +24,29 @@ const TYPES = [
 ].map(([key, name]) => ({ key, name }));
 
 function requireAdmin(req, res) {
-  if (req.userRole === 'admin') return true;
-  res.status(403).json({ message: 'Admin access required' });
+  if (isAdminRole(req.userRole)) return true;
+  res.status(403).json({ message: '仅管理员可以管理用户与权限' });
   return false;
+}
+
+function userPermissionDto(user, assignedPermissions) {
+  return {
+    ...user,
+    role_label: ROLE_LABELS[user.role] || user.role,
+    permissions: effectivePermissions(user.role, assignedPermissions),
+    assigned_permissions: [...assignedPermissions].sort(),
+    role_permissions: [...permissionsForRole(user.role)]
+  };
 }
 
 exports.getPermissionTypes = (req, res) => res.json(TYPES);
 
 exports.getMyPermissions = async (req, res) => {
   const [rows] = await db.query('SELECT permission_key FROM permissions WHERE user_id = ?', [req.userId]);
-  res.json({ role: req.userRole, permissions: rows.map((row) => row.permission_key) });
+  res.json(userPermissionDto(
+    { role: req.userRole },
+    rows.map((row) => row.permission_key)
+  ));
 };
 
 exports.getAllUsersWithPermissions = async (req, res) => {
@@ -34,16 +57,22 @@ exports.getAllUsersWithPermissions = async (req, res) => {
      FROM users u LEFT JOIN permissions p ON p.user_id = u.id
      GROUP BY u.id ORDER BY u.id DESC`
   );
-  res.json(rows.map((row) => ({ ...row, permissions: row.permissions ? row.permissions.split(',') : [] })));
+  res.json(rows.map((row) => userPermissionDto(
+    { ...row, permissions: undefined },
+    row.permissions ? row.permissions.split(',') : []
+  )));
 };
 
 exports.getUserPermissions = async (req, res) => {
   if (!requireAdmin(req, res)) return;
   const userId = positiveInt(req.params.userId, { field: 'User ID' });
   const [users] = await db.query('SELECT id, username, email, role FROM users WHERE id = ?', [userId]);
-  if (!users.length) return res.status(404).json({ message: 'User not found' });
+  if (!users.length) return res.status(404).json({ message: '未找到用户' });
   const [permissions] = await db.query('SELECT permission_key FROM permissions WHERE user_id = ?', [userId]);
-  res.json({ ...users[0], permissions: permissions.map((row) => row.permission_key) });
+  res.json(userPermissionDto(
+    users[0],
+    permissions.map((row) => row.permission_key)
+  ));
 };
 
 exports.updateUserPermissions = async (req, res) => {
@@ -51,28 +80,42 @@ exports.updateUserPermissions = async (req, res) => {
   const userId = positiveInt(req.params.userId, { field: 'User ID' });
   const requested = [...new Set(Array.isArray(req.body.permissions) ? req.body.permissions : [])];
   const allowed = new Set(TYPES.map((item) => item.key));
-  if (requested.some((key) => !allowed.has(key))) return res.status(400).json({ message: 'Unknown permission' });
+  if (requested.some((key) => !allowed.has(key))) return res.status(400).json({ message: '包含未知权限' });
   const requestedRole = req.body.role == null ? null : String(req.body.role);
-  if (requestedRole && !VALID_ROLES.has(requestedRole)) return res.status(400).json({ message: 'Invalid role' });
+  if (requestedRole && !isValidRole(requestedRole)) return res.status(400).json({ message: '角色无效' });
 
   const connection = await db.getConnection();
   try {
     await connection.beginTransaction();
     const [targets] = await connection.query('SELECT id, role FROM users WHERE id = ? FOR UPDATE', [userId]);
     if (!targets.length) {
-      const error = new Error('User not found');
+      const error = new Error('未找到用户');
       error.status = 404;
       throw error;
     }
-    if (targets[0].role === 'admin' && requestedRole && requestedRole !== 'admin') {
+    if (targets[0].role === ROLES.ADMIN && requestedRole && requestedRole !== ROLES.ADMIN) {
       const [admins] = await connection.query(`SELECT id FROM users WHERE role = 'admin' FOR UPDATE`);
       if (admins.length <= 1) {
-        const error = new Error('Cannot demote the last administrator');
+        const error = new Error('不能降级最后一名管理员');
         error.status = 409;
         throw error;
       }
     }
-    if (requestedRole) await connection.query('UPDATE users SET role = ? WHERE id = ?', [requestedRole, userId]);
+    if (requestedRole) {
+      await connection.query(
+        'UPDATE users SET role = ? WHERE id = ?',
+        [requestedRole, userId]
+      );
+      if (
+        [ROLES.STREAMER, ROLES.ADMIN].includes(targets[0].role)
+        && VIEWER_ROLES.includes(requestedRole)
+      ) {
+        await defaultViewerIdentityService.recomputeUserRole(
+          userId,
+          connection
+        );
+      }
+    }
     await connection.query('DELETE FROM permissions WHERE user_id = ?', [userId]);
     for (const key of requested) {
       await connection.query('INSERT INTO permissions (user_id, permission_key) VALUES (?, ?)', [userId, key]);
@@ -81,7 +124,7 @@ exports.updateUserPermissions = async (req, res) => {
     res.json({ success: true });
   } catch (error) {
     await connection.rollback();
-    res.status(error.status || 500).json({ message: error.status ? error.message : 'Failed to update user permissions' });
+    res.status(error.status || 500).json({ message: error.status ? error.message : '更新用户权限失败' });
   } finally {
     connection.release();
   }

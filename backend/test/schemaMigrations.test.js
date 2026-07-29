@@ -46,6 +46,18 @@ test('migration catalog discovers strict filenames in stable version order', () 
       {
         version: '202607240004',
         name: 'phase_4j_obs_overlays'
+      },
+      {
+        version: '202607240005',
+        name: 'six_role_rbac'
+      },
+      {
+        version: '202607240006',
+        name: 'viewer_identity_sync'
+      },
+      {
+        version: '202607240007',
+        name: 'official_live_ai'
       }
     ]
   );
@@ -88,6 +100,10 @@ test('migration catalog discovers strict filenames in stable version order', () 
   );
   assert.deepEqual(migrations[3].depends_on, ['202607240003']);
   assert.deepEqual(migrations[3].tables, ['obs_overlay_events']);
+  assert.deepEqual(migrations[4].depends_on, ['202607240004']);
+  assert.equal(migrations[4].schema_change, 'users_role');
+  assert.deepEqual(migrations[4].tables, []);
+  assert.deepEqual(migrations[4].indexes, []);
 });
 
 test('migration discovery rejects invalid SQL filenames and missing contracts', (t) => {
@@ -190,22 +206,105 @@ test('Phase 4I migration permits a legacy preflight before song_aliases exists',
   assert.match(queries[0], /information_schema\.TABLES/);
 });
 
-test('contracts cover 22 legacy and eight additive target tables', () => {
+test('six-role migration maps only legacy roles and finishes with the exact enum', () => {
+  const migration = loadMigrations()[4];
+  assert.match(migration.sql, /UPDATE users SET role = 'fan_club' WHERE role = 'user'/);
+  assert.match(migration.sql, /UPDATE users SET role = 'streamer' WHERE role = 'premium'/);
+  assert.match(
+    migration.sql,
+    /ENUM\(''fan_club'',''captain'',''admiral'',''governor'',''streamer'',''admin''\)/
+  );
+  assert.match(migration.sql, /COLLATION_NAME/);
+  assert.equal(
+    (migration.sql.match(/CHARACTER SET utf8mb4 COLLATE/g) || []).length,
+    2
+  );
+  assert.doesNotMatch(
+    migration.sql,
+    /\b(?:DROP\s+TABLE|TRUNCATE\s+TABLE|DELETE\s+FROM|ALTER\s+DATABASE)\b/i
+  );
+});
+
+test('six-role preflight fails closed when an unknown role is present', async () => {
+  const migration = loadMigrations()[4];
+  await assert.rejects(
+    assertMigrationDataPreconditions({
+      async query(sql, parameters) {
+        assert.match(sql, /role NOT IN/);
+        assert.deepEqual(parameters, [
+          'user',
+          'premium',
+          'admin',
+          'fan_club',
+          'captain',
+          'admiral',
+          'governor',
+          'streamer'
+        ]);
+        return [[{ role: 'unknown', count: 1 }]];
+      }
+    }, migration),
+    (error) => error instanceof MigrationError
+      && error.code === 'migration_unknown_user_role'
+  );
+});
+
+test('viewer identity migration extends the existing binding system without destructive SQL', () => {
+  const migration = loadMigrations().find(({ version }) => version === '202607240006');
+  assert.ok(migration);
+  assert.equal(migration.schema_change, 'viewer_identity_sync');
+  assert.deepEqual(migration.tables, ['viewer_identity_audit']);
+  assert.match(migration.sql, /ALTER TABLE user_bilibili_bindings ADD COLUMN guard_level/i);
+  assert.match(migration.sql, /identity_sync_status/i);
+  assert.match(migration.sql, /manual_expires_at/i);
+  assert.match(migration.sql, /CREATE TABLE IF NOT EXISTS viewer_identity_audit/i);
+  assert.match(migration.sql, /information_schema\.COLUMNS/i);
+  assert.doesNotMatch(migration.sql, /(?:^|;)\s*(?:DROP|TRUNCATE|DELETE)\b/im);
+  assert.doesNotMatch(migration.sql, /(?:cookie|token|password|credential)/i);
+});
+
+test('contracts cover 22 legacy and eleven additive target tables', () => {
   assert.equal(legacyTables.length, 22);
   assert.equal(new Set(legacyTables).size, 22);
   assert.deepEqual(Object.keys(targetContracts), [
+    'official_live_event_dedup',
+    'official_ai_memory',
     ...MIGRATION.tables,
     'song_request_policies',
     'song_request_details',
-    'obs_overlay_events'
+    'obs_overlay_events',
+    'viewer_identity_audit'
   ]);
   assert.deepEqual(Object.keys(migrationContracts), [
     '202607240001',
     '202607240002',
     '202607240003',
-    '202607240004'
+    '202607240004',
+    '202607240005',
+    '202607240006',
+    '202607240007'
   ]);
   assert.equal(ledgerContract.indexes.some(({ name }) => name === 'PRIMARY'), true);
+});
+
+test('official live migration stores only irreversible keys and bounded AI memory', () => {
+  const migration = loadMigrations().find(
+    ({ version }) => version === '202607240007'
+  );
+  assert.ok(migration);
+  assert.deepEqual(migration.tables, [
+    'official_live_event_dedup',
+    'official_ai_memory'
+  ]);
+  assert.match(migration.sql, /event_digest CHAR\(64\)/i);
+  assert.match(migration.sql, /viewer_key CHAR\(64\)/i);
+  assert.match(migration.sql, /content VARCHAR\(800\)/i);
+  assert.match(migration.sql, /expires_at DATETIME\(3\)/i);
+  assert.doesNotMatch(
+    migration.sql,
+    /open_id|union_id|bili_uid|nickname|avatar|payload|users|wallet|orders/i
+  );
+  assert.doesNotMatch(migration.sql, /(?:^|;)\s*(?:DROP|TRUNCATE|DELETE)\b/im);
 });
 
 test('schema contract comparison is strict for columns and indexes', () => {

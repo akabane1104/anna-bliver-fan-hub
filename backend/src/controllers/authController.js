@@ -6,7 +6,16 @@ const { sendVerificationEmail } = require('../utils/emailService');
 const { verifyCaptcha } = require('../utils/aliyunCaptcha');
 const { isEmailVerificationEnabled } = require('../utils/optionalFeatures');
 const pointsService = require('../services/pointsService');
+const {
+  defaultViewerIdentityService
+} = require('../services/viewerIdentityService');
 const { positiveInt } = require('../utils/validation');
+const {
+  ROLES,
+  VIEWER_ROLES,
+  isAdminRole,
+  isValidRole
+} = require('../config/accessControl');
 
 // 生成6位随机验证码
 function generateVerificationCode() {
@@ -98,7 +107,7 @@ exports.register = async (req, res) => {
     const isOpen = settings.length > 0 ? settings[0].setting_value === 'true' : true;
 
     if (!isOpen) {
-      return res.status(403).json({ message: 'Registration is currently closed' });
+      return res.status(403).json({ message: '当前未开放注册' });
     }
 
     const { username, email, password, verificationCode, captchaVerifyParam } = req.body;
@@ -164,11 +173,11 @@ exports.register = async (req, res) => {
     );
     if (existing.some((row) => row.email === email)) {
       await connection.rollback();
-      return res.status(409).json({ message: 'Email already registered' });
+      return res.status(409).json({ message: '该邮箱已被注册' });
     }
     if (existing.some((row) => row.username === username)) {
       await connection.rollback();
-      return res.status(409).json({ message: 'Username already taken' });
+      return res.status(409).json({ message: '该用户名已被使用' });
     }
 
     const [result] = await connection.query(
@@ -182,14 +191,14 @@ exports.register = async (req, res) => {
     await connection.commit();
 
     res.status(201).json({
-      message: 'User registered successfully',
+      message: '注册成功',
       userId: result.insertId
     });
   } catch (error) {
     if (connection) await connection.rollback().catch(() => {});
     console.error('Register error:', error);
-    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: 'Email or username already registered' });
-    res.status(500).json({ message: 'Server error' });
+    if (error.code === 'ER_DUP_ENTRY') return res.status(409).json({ message: '邮箱或用户名已被注册' });
+    res.status(500).json({ message: '服务器错误' });
   } finally {
     connection?.release();
   }
@@ -234,6 +243,21 @@ exports.login = async (req, res) => {
       return res.status(401).json({ message: '邮箱或密码错误' });
     }
 
+    try {
+      await defaultViewerIdentityService.refreshUserIfStale(user.id);
+      const [currentUsers] = await db.query(
+        'SELECT role FROM users WHERE id = ?',
+        [user.id]
+      );
+      if (currentUsers.length) user.role = currentUsers[0].role;
+    } catch (error) {
+      console.warn('[viewer-identity]', {
+        code: 'login_refresh_failed',
+        user_id: Number(user.id),
+        error_code: error.code || 'identity_sync_failed'
+      });
+    }
+
     // Generate token
     const token = jwt.sign(
       { userId: user.id, role: user.role },
@@ -255,7 +279,7 @@ exports.login = async (req, res) => {
     });
   } catch (error) {
     console.error('Login error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -267,7 +291,7 @@ exports.getProfile = async (req, res) => {
     );
 
     if (users.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: '未找到用户' });
     }
 
     const pointBalances = await pointsService.getUserPointBalances(req.userId);
@@ -278,7 +302,7 @@ exports.getProfile = async (req, res) => {
     });
   } catch (error) {
     console.error('Get profile error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -286,8 +310,8 @@ exports.getAllUsers = async (req, res) => {
   try {
     // Check if requester is admin
     const [admins] = await db.query('SELECT role FROM users WHERE id = ?', [req.userId]);
-    if (admins.length === 0 || admins[0].role !== 'admin') {
-      return res.status(403).json({ message: 'Access denied' });
+    if (admins.length === 0 || !isAdminRole(admins[0].role)) {
+      return res.status(403).json({ message: '仅管理员可以查看用户列表' });
     }
 
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
@@ -324,7 +348,7 @@ exports.getAllUsers = async (req, res) => {
     });
   } catch (error) {
     console.error('Get all users error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: '服务器错误' });
   }
 };
 
@@ -336,12 +360,12 @@ exports.updateUserRole = async (req, res) => {
 
     // Check if requester is admin
     const [admins] = await db.query('SELECT role FROM users WHERE id = ?', [req.userId]);
-    if (admins.length === 0 || admins[0].role !== 'admin') {
-      return res.status(403).json({ message: 'Access denied' });
+    if (admins.length === 0 || !isAdminRole(admins[0].role)) {
+      return res.status(403).json({ message: '仅管理员可以修改用户角色' });
     }
 
-    if (!['user', 'premium', 'admin'].includes(role)) {
-      return res.status(400).json({ message: 'Invalid role' });
+    if (!isValidRole(role)) {
+      return res.status(400).json({ message: '角色无效' });
     }
 
     connection = await db.getConnection();
@@ -349,24 +373,37 @@ exports.updateUserRole = async (req, res) => {
     const [targets] = await connection.query('SELECT id, role FROM users WHERE id = ? FOR UPDATE', [targetUserId]);
     if (!targets.length) {
       await connection.rollback();
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: '未找到用户' });
     }
-    if (targets[0].role === 'admin' && role !== 'admin') {
+    if (targets[0].role === ROLES.ADMIN && role !== ROLES.ADMIN) {
       const [adminRows] = await connection.query(`SELECT id FROM users WHERE role = 'admin' FOR UPDATE`);
       if (adminRows.length <= 1) {
         await connection.rollback();
-        return res.status(409).json({ message: 'Cannot demote the last administrator' });
+        return res.status(409).json({ message: '不能降级最后一名管理员' });
       }
     }
 
     await connection.query('UPDATE users SET role = ? WHERE id = ?', [role, targetUserId]);
+    if (
+      [ROLES.STREAMER, ROLES.ADMIN].includes(targets[0].role)
+      && VIEWER_ROLES.includes(role)
+    ) {
+      await defaultViewerIdentityService.recomputeUserRole(
+        targetUserId,
+        connection
+      );
+    }
     await connection.commit();
+    const [updatedUsers] = await db.query(
+      'SELECT role FROM users WHERE id = ?',
+      [targetUserId]
+    );
 
-    res.json({ message: 'User role updated successfully', role });
+    res.json({ message: '用户角色已更新', role: updatedUsers[0]?.role || role });
   } catch (error) {
     if (connection) await connection.rollback().catch(() => {});
     console.error('Update role error:', error);
-    res.status(500).json({ message: 'Server error' });
+    res.status(500).json({ message: '服务器错误' });
   } finally {
     connection?.release();
   }

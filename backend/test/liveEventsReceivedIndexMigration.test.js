@@ -18,7 +18,10 @@ test('next additive migration covers received_at ordering with the stable id key
     '202607240001_phase_4b_4c_live_control.sql',
     '202607240002_live_events_received_at_index.sql',
     '202607240003_phase_4i_song_request_experience.sql',
-    '202607240004_phase_4j_obs_overlays.sql'
+    '202607240004_phase_4j_obs_overlays.sql',
+    '202607240005_six_role_rbac.sql',
+    '202607240006_viewer_identity_sync.sql',
+    '202607240007_official_live_ai.sql'
   ]);
 
   const sql = fs.readFileSync(

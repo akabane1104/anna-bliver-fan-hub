@@ -69,6 +69,29 @@ const EVENT_TYPES = "enum('danmaku','gift','super_chat','guard_buy','like','room
 const REQUEST_STATUSES = "enum('observed','needs_match','queued','active','completed','rejected','cancelled','skipped','failed')";
 
 const targetContracts = Object.freeze({
+  official_live_event_dedup: table([
+    asciiColumn('event_digest', 'char(64)'),
+    asciiColumn('event_type', 'varchar(64)'),
+    column('first_seen_at', 'timestamp(3)', { default: 'CURRENT_TIMESTAMP(3)' }),
+    column('expires_at', 'datetime(3)')
+  ], [
+    index('PRIMARY', true, ['event_digest']),
+    index('idx_official_event_dedup_expiry', false, ['expires_at'])
+  ]),
+
+  official_ai_memory: table([
+    column('id', 'bigint unsigned', { auto_increment: true }),
+    asciiColumn('viewer_key', 'char(64)'),
+    textColumn('message_role', "enum('user','assistant')"),
+    textColumn('content', 'varchar(800)'),
+    column('created_at', 'timestamp(3)', { default: 'CURRENT_TIMESTAMP(3)' }),
+    column('expires_at', 'datetime(3)')
+  ], [
+    index('PRIMARY', true, ['id']),
+    index('idx_official_ai_memory_viewer', false, ['viewer_key', 'created_at', 'id']),
+    index('idx_official_ai_memory_expiry', false, ['expires_at'])
+  ]),
+
   live_events: table([
     column('id', 'bigint unsigned', { auto_increment: true }),
     asciiColumn('event_id', 'varchar(255)'),
@@ -302,6 +325,57 @@ const targetContracts = Object.freeze({
     index('unique_obs_overlay_source_idempotency', true, ['source', 'idempotency_key'])
   ], [
     foreignKey('fk_obs_overlay_creator', ['created_by_user_id'], 'users', ['id'], 'SET NULL')
+  ]),
+
+  viewer_identity_audit: table([
+    column('id', 'bigint unsigned', { auto_increment: true }),
+    column('binding_id', 'int', { nullable: true }),
+    column('target_user_id', 'int'),
+    column('bilibili_uid', 'bigint', { nullable: true }),
+    textColumn(
+      'action',
+      "enum('sync_confirmed','sync_failed','listener_confirmed','manual_created','manual_updated','manual_revoked','manual_expired','manual_overridden','role_recomputed')"
+    ),
+    column('actor_user_id', 'int', { nullable: true }),
+    textColumn(
+      'actor_role',
+      "enum('fan_club','captain','admiral','governor','streamer','admin')",
+      { nullable: true }
+    ),
+    textColumn(
+      'old_role',
+      "enum('fan_club','captain','admiral','governor','streamer','admin')",
+      { nullable: true }
+    ),
+    textColumn(
+      'new_role',
+      "enum('fan_club','captain','admiral','governor','streamer','admin')",
+      { nullable: true }
+    ),
+    textColumn(
+      'source',
+      "enum('automatic','transient_qr','server_provider','official_listener','manual_fallback')"
+    ),
+    textColumn('reason', 'varchar(500)', { nullable: true }),
+    column('valid_until', 'datetime(3)', { nullable: true }),
+    asciiColumn('event_key', 'varchar(255)', { nullable: true }),
+    column('created_at', 'timestamp(3)', { default: 'CURRENT_TIMESTAMP(3)' })
+  ], [
+    index('PRIMARY', true, ['id']),
+    index('idx_viewer_identity_actor', false, ['actor_user_id', 'created_at']),
+    index('idx_viewer_identity_binding', false, ['binding_id', 'created_at']),
+    index('idx_viewer_identity_target', false, ['target_user_id', 'created_at']),
+    index('unique_viewer_identity_event', true, ['event_key'])
+  ], [
+    foreignKey(
+      'fk_viewer_identity_binding',
+      ['binding_id'],
+      'user_bilibili_bindings',
+      ['id'],
+      'SET NULL'
+    ),
+    foreignKey('fk_viewer_identity_target', ['target_user_id'], 'users', ['id']),
+    foreignKey('fk_viewer_identity_actor', ['actor_user_id'], 'users', ['id'], 'SET NULL')
   ])
 });
 
@@ -374,6 +448,51 @@ const migrationContracts = Object.freeze({
     kind: 'tables',
     depends_on: Object.freeze(['202607240003']),
     tables: Object.freeze(['obs_overlay_events']),
+    indexes: Object.freeze([])
+  }),
+  '202607240005': Object.freeze({
+    name: 'six_role_rbac',
+    kind: 'schema_change',
+    schema_change: 'users_role',
+    depends_on: Object.freeze(['202607240004']),
+    tables: Object.freeze([]),
+    indexes: Object.freeze([])
+  }),
+  '202607240006': Object.freeze({
+    name: 'viewer_identity_sync',
+    kind: 'tables_and_indexes',
+    schema_change: 'viewer_identity_sync',
+    depends_on: Object.freeze(['202607240005']),
+    tables: Object.freeze(['viewer_identity_audit']),
+    indexes: Object.freeze([
+      Object.freeze({
+        table: 'user_bilibili_bindings',
+        name: 'idx_binding_identity_due',
+        unique: false,
+        columns: Object.freeze(['identity_sync_status', 'next_sync_at'])
+      }),
+      Object.freeze({
+        table: 'user_bilibili_bindings',
+        name: 'idx_binding_guard_expiry',
+        unique: false,
+        columns: Object.freeze(['guard_expires_at'])
+      }),
+      Object.freeze({
+        table: 'user_bilibili_bindings',
+        name: 'idx_binding_manual_expiry',
+        unique: false,
+        columns: Object.freeze(['manual_expires_at'])
+      })
+    ])
+  }),
+  '202607240007': Object.freeze({
+    name: 'official_live_ai',
+    kind: 'tables',
+    depends_on: Object.freeze(['202607240006']),
+    tables: Object.freeze([
+      'official_live_event_dedup',
+      'official_ai_memory'
+    ]),
     indexes: Object.freeze([])
   })
 });

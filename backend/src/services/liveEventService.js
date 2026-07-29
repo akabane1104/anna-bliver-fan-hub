@@ -2,6 +2,9 @@ const database = require('../config/database');
 const { createContentHash } = require('../utils/canonicalJson');
 const { defaultSongRequestService } = require('./songRequestService');
 const { defaultLiveHomeService } = require('./liveHomeService');
+const {
+  defaultViewerIdentityService
+} = require('./viewerIdentityService');
 
 const INSERT_LIVE_EVENT_SQL = `
   INSERT INTO live_events (
@@ -143,6 +146,7 @@ function createLiveEventService(options = {}) {
       : async (event, context) => {
         const liveState = await defaultLiveHomeService.observeAcceptedEvent(event, context);
         const songRequest = await defaultSongRequestService.observeAcceptedDanmaku(event, context);
+        await defaultViewerIdentityService.observeTrustedGuardEvent(event, context);
         return event.event_type === 'danmaku' ? songRequest : liveState;
       });
 

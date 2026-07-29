@@ -204,7 +204,7 @@ test('Phase 4G isolated HTTP flow preserves one unified queue and safe DTOs', {
     const adminHash = await bcrypt.hash(adminPassword, 6);
     const [viewerResult] = await pool.query(
       `INSERT INTO users (username, email, password, role)
-       VALUES (?, ?, ?, 'user')`,
+       VALUES (?, ?, ?, 'fan_club')`,
       ['phase4g-viewer', 'phase4g-viewer@example.com', viewerHash]
     );
     const [adminResult] = await pool.query(

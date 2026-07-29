@@ -165,17 +165,17 @@ INSERT INTO users (username, email, password, role)
 VALUES ('phase4d_admin', 'phase4d-admin@example.com', 'synthetic-not-a-real-password-hash', 'admin');
 SET @phase4d_admin_id = LAST_INSERT_ID();
 INSERT INTO users (username, email, password, role) VALUES
-  ('phase4d_viewer_simple', 'phase4d-viewer-simple@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_traditional', 'phase4d-viewer-traditional@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_unmatched', 'phase4d-viewer-unmatched@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_lowercase', 'phase4d-viewer-lowercase@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_uppercase', 'phase4d-viewer-uppercase@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_mixedcase', 'phase4d-viewer-mixedcase@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_duplicate', 'phase4d-viewer-duplicate@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_conflict', 'phase4d-viewer-conflict@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_one', 'phase4d-viewer-one@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_two', 'phase4d-viewer-two@example.com', 'synthetic-not-a-real-password-hash', 'user'),
-  ('phase4d_viewer_rollback', 'phase4d-viewer-rollback@example.com', 'synthetic-not-a-real-password-hash', 'user');
+  ('phase4d_viewer_simple', 'phase4d-viewer-simple@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_traditional', 'phase4d-viewer-traditional@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_unmatched', 'phase4d-viewer-unmatched@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_lowercase', 'phase4d-viewer-lowercase@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_uppercase', 'phase4d-viewer-uppercase@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_mixedcase', 'phase4d-viewer-mixedcase@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_duplicate', 'phase4d-viewer-duplicate@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_conflict', 'phase4d-viewer-conflict@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_one', 'phase4d-viewer-one@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_two', 'phase4d-viewer-two@example.com', 'synthetic-not-a-real-password-hash', 'fan_club'),
+  ('phase4d_viewer_rollback', 'phase4d-viewer-rollback@example.com', 'synthetic-not-a-real-password-hash', 'fan_club');
 INSERT INTO user_bilibili_bindings (
   user_id, bilibili_uid, bilibili_open_id, bilibili_uname, status
 )

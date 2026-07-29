@@ -14,6 +14,7 @@ const marshmallowRoutes = require('./routes/marshmallows');
 const bilibiliRoutes = require('./routes/bilibili');
 const bilibiliBindingRoutes = require('./routes/bilibiliBinding');
 const permissionRoutes = require('./routes/permissions');
+const viewerIdentityRoutes = require('./routes/viewerIdentities');
 const pointsRoutes = require('./routes/points');
 const { createLiveEventRouter } = require('./routes/liveEvents');
 const { createSongRequestRouter } = require('./routes/songRequests');
@@ -22,6 +23,9 @@ const { createLiveHomeRouter } = require('./routes/liveHome');
 const { createObsOverlayRouter } = require('./routes/obsOverlay');
 const pointsService = require('./services/pointsService');
 const { startBotEventBridge } = require('./services/botEventBridge');
+const {
+  defaultViewerIdentityService
+} = require('./services/viewerIdentityService');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
@@ -55,6 +59,7 @@ app.use('/api/marshmallows', marshmallowRoutes);
 app.use('/api/bilibili', bilibiliRoutes);
 app.use('/api/bilibili-binding', bilibiliBindingRoutes);
 app.use('/api/permissions', permissionRoutes);
+app.use('/api/viewer-identities', viewerIdentityRoutes);
 app.use('/api/points', pointsRoutes);
 app.use('/api/song-requests', createSongRequestRouter());
 app.use('/api/live-home', createLiveHomeRouter());
@@ -77,6 +82,13 @@ async function bootstrap() {
   await pointsService.ensurePointsSchema();
   await pointsService.settleBilibiliPoints();
   pointsService.scheduleDailySettlement();
+  if (
+    String(
+      process.env.AUTO_VIEWER_IDENTITY_SYNC_PRODUCTION_ENABLED || 'false'
+    ).trim().toLowerCase() === 'true'
+  ) {
+    defaultViewerIdentityService.scheduleReconciliation();
+  }
   startBotEventBridge();
   app.listen(PORT, '0.0.0.0', () => console.log(`anna-bliver-fan-hub listening on ${PORT}`));
 }
