@@ -285,7 +285,7 @@ async function validateOfficialWssLinks(context, options = {}) {
   for (const value of trust.wssLinks) {
     const parsed = parseOfficialWssUrl(value);
     if (seen.has(parsed.href)) {
-      throw officialWssBoundaryError('invalid_official_wss_link');
+      continue;
     }
     seen.add(parsed.href);
     const addresses = await resolveAndValidateHostname(parsed.hostname, options);

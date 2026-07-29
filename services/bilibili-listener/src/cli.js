@@ -53,6 +53,7 @@ function printResult(value, json, stdout = process.stdout) {
 
 function installShutdownHandlers({
   shutdown,
+  controlledReconnect = null,
   processLike = process
 }) {
   let shutdownPromise = null;
@@ -74,10 +75,16 @@ function installShutdownHandlers({
   const onSigint = () => invoke(130);
   const onSigterm = () => invoke(143);
   const onFatal = () => invoke(1);
+  const onSigusr2 = () => {
+    Promise.resolve(controlledReconnect?.()).catch(() => {});
+  };
   processLike.once('SIGINT', onSigint);
   processLike.once('SIGTERM', onSigterm);
   processLike.once('uncaughtException', onFatal);
   processLike.once('unhandledRejection', onFatal);
+  if (typeof processLike.on === 'function') {
+    processLike.on('SIGUSR2', onSigusr2);
+  }
   return {
     invoke,
     dispose() {
@@ -85,6 +92,7 @@ function installShutdownHandlers({
       processLike.off('SIGTERM', onSigterm);
       processLike.off('uncaughtException', onFatal);
       processLike.off('unhandledRejection', onFatal);
+      processLike.off('SIGUSR2', onSigusr2);
     }
   };
 }
@@ -119,7 +127,8 @@ async function main(
         async shutdown() {
           await runtime.stop();
           resolveStopped();
-        }
+        },
+        controlledReconnect: () => runtime.controlledReconnect?.()
       });
       try {
         await runtime.start();

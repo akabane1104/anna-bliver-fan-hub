@@ -39,7 +39,7 @@ test('synthetic adapter, mapper, queue, and delivery form one offline pipeline',
   await supervisor.stop();
 });
 
-test('listener core never interprets point commands or connects to MySQL', () => {
+test('listener MySQL access is isolated from points, orders, roles, and playlists', () => {
   const fs = require('node:fs');
   const path = require('node:path');
   const root = path.resolve(__dirname, '../src');
@@ -47,6 +47,19 @@ test('listener core never interprets point commands or connects to MySQL', () =>
     .filter((name) => name.endsWith('.js'))
     .map((name) => fs.readFileSync(path.join(root, name), 'utf8'))
     .join('\n');
-  assert.doesNotMatch(source, /pointsService|point_wallets|point_accounts|mysql2|createPool/);
+  assert.doesNotMatch(
+    source,
+    /pointsService|point_wallets|point_accounts|point_transactions|orders|users\.role/
+  );
+  const repository = fs.readFileSync(
+    path.join(root, 'officialLiveRepository.js'),
+    'utf8'
+  );
+  assert.match(repository, /official_live_event_dedup/);
+  assert.match(repository, /official_ai_memory/);
+  assert.doesNotMatch(
+    repository,
+    /users|wallet|orders|products|song_requests|viewer_identity_audit/
+  );
   assert.doesNotMatch(source, /点歌.*(?:parse|match)|song_requests|playlist/i);
 });

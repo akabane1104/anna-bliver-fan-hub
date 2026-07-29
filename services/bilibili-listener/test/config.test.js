@@ -49,6 +49,7 @@ test('service gates are independent and active mode fails closed when incomplete
     listenerEnabled: false,
     officialApiEnabled: false,
     officialWssEnabled: false,
+    officialLiveEnabled: false,
     backendIngestEnabled: false,
     giftAutoCreditEnabled: false
   });
@@ -64,6 +65,13 @@ test('service gates are independent and active mode fails closed when incomplete
     }),
     { code: 'gift_auto_credit_not_authorized' }
   );
+  assert.doesNotThrow(() => loadListenerServiceConfig({
+    BILIBILI_LISTENER_ENABLED: 'true',
+    BILIBILI_OFFICIAL_API_ENABLED: 'true',
+    BILIBILI_OFFICIAL_WSS_ENABLED: 'true',
+    BILI_OFFICIAL_LIVE_ENABLED: 'true',
+    LIVE_EVENT_INGEST_ENABLED: 'false'
+  }));
 });
 
 test('dry-run does not require a secret but still requires an explicit safe target', () => {

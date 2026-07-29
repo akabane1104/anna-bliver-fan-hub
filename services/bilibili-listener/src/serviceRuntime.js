@@ -8,8 +8,8 @@ const {
 } = require('./healthStatus');
 const { acquireInstanceLock } = require('./instanceLock');
 const {
-  createProductionRuntime
-} = require('./productionRuntime');
+  createOfficialLiveRuntime
+} = require('./officialLiveRuntime');
 const {
   createStatusReporterFromEnv
 } = require('./statusReporter');
@@ -24,7 +24,7 @@ function requireDataDirectory(env) {
 
 function createServiceRuntime({
   env = process.env,
-  runtimeFactory = createProductionRuntime,
+  runtimeFactory = createOfficialLiveRuntime,
   statusReporterFactory = createStatusReporterFromEnv,
   lockFactory = acquireInstanceLock,
   clock = Date.now,
@@ -51,7 +51,17 @@ function createServiceRuntime({
     const sourceState = activeSnapshot?.source?.source_state;
     let reportedState = state;
     if (state === 'running' || state === 'starting') {
-      if (activeSnapshot?.state === 'fatal') {
+      if (activeSnapshot?.state === 'FAILED') {
+        reportedState = 'configuration_error';
+      } else if (activeSnapshot?.state === 'WAITING_FOR_OFFICIAL_SESSION') {
+        reportedState = 'waiting_for_official_session';
+      } else if (activeSnapshot?.state === 'RECONNECTING') {
+        reportedState = 'reconnecting';
+      } else if (activeSnapshot?.state === 'STARTING') {
+        reportedState = 'starting';
+      } else if (activeSnapshot?.state === 'ACTIVE') {
+        reportedState = 'healthy';
+      } else if (activeSnapshot?.state === 'fatal') {
         reportedState = activeSnapshot.degraded_reason ===
           'official_identity_code_error'
           ? 'credentials_expired'
@@ -77,7 +87,13 @@ function createServiceRuntime({
         reportedState = 'healthy';
       }
     }
-    const healthy = ['disabled', 'healthy'].includes(reportedState);
+    const healthy = [
+      'disabled',
+      'healthy',
+      'starting',
+      'reconnecting',
+      'waiting_for_official_session'
+    ].includes(reportedState);
     return Object.freeze({
       healthy,
       enabled: serviceConfig?.listenerEnabled ?? null,
@@ -86,6 +102,7 @@ function createServiceRuntime({
       feature_gates: Object.freeze({
         official_api: serviceConfig?.officialApiEnabled ?? null,
         official_wss: serviceConfig?.officialWssEnabled ?? null,
+        official_live: serviceConfig?.officialLiveEnabled ?? null,
         backend_ingest: serviceConfig?.backendIngestEnabled ?? null,
         gift_auto_credit: serviceConfig?.giftAutoCreditEnabled ?? null
       }),
@@ -237,6 +254,11 @@ function createServiceRuntime({
         );
       }
       return snapshot();
+    },
+    controlledReconnect() {
+      return runtime?.controlledReconnect?.() || Promise.resolve(
+        Object.freeze({ status: 'not_active' })
+      );
     },
     snapshot
   });

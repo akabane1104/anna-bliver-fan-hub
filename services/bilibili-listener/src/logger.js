@@ -13,7 +13,8 @@ const ALLOWED_FIELDS = new Set([
   'event_fingerprint',
   'result',
   'error_code',
-  'counters'
+  'counters',
+  'output'
 ]);
 const RATE_LIMITED_CODES = new Set([
   'delivery_result',
@@ -55,7 +56,12 @@ function createSafeLogger({
         component: 'bilibili-listener'
       };
       for (const [key, value] of Object.entries(fields)) {
-        if (ALLOWED_FIELDS.has(key)) record[key] = sanitizeValue(key, value);
+        if (
+          ALLOWED_FIELDS.has(key) &&
+          (key !== 'output' || record.code === 'ai_local_output')
+        ) {
+          record[key] = sanitizeValue(key, value);
+        }
       }
       const frozenRecord = Object.freeze(record);
       if (

@@ -219,19 +219,19 @@ VALUES
     'phase4e_viewer_a',
     'phase4e-viewer-a@example.com',
     'synthetic-not-a-real-password-hash',
-    'user'
+    'fan_club'
   ),
   (
     'phase4e_viewer_b',
     'phase4e-viewer-b@example.com',
     'synthetic-not-a-real-password-hash',
-    'user'
+    'fan_club'
   ),
   (
     'phase4f_viewer',
     'phase4f-viewer@example.com',
     'synthetic-not-a-real-password-hash',
-    'user'
+    'fan_club'
   );
 INSERT INTO user_bilibili_bindings (
   user_id, bilibili_uid, bilibili_open_id, bilibili_uname, status

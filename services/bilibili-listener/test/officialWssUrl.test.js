@@ -76,6 +76,27 @@ test('same app/start response yields session-bound links and auth body', async (
   assert.equal(JSON.stringify(trust), '{}');
 });
 
+test('duplicate links from one official start response are safely deduplicated', async () => {
+  const trust = session({
+    links: [
+      'wss://session-a.example.net/sub',
+      'wss://session-a.example.net:443/sub',
+      'wss://session-b.example.net/sub',
+      'wss://session-a.example.net/sub'
+    ]
+  });
+  const links = await validateOfficialWssLinks(trust, {
+    lookup: publicLookup
+  });
+  assert.deepEqual(
+    links.map((link) => link.href),
+    [
+      'wss://session-a.example.net/sub',
+      'wss://session-b.example.net/sub'
+    ]
+  );
+});
+
 test('links and auth cannot cross app/start session boundaries', async () => {
   const first = session({ authBody: '{"session":1}' });
   const second = session({ authBody: '{"session":2}' });

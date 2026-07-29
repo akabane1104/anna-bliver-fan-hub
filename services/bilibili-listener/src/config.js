@@ -113,6 +113,105 @@ const OFFICIAL_NUMERIC_SETTINGS = Object.freeze({
   })
 });
 
+const OFFICIAL_LIVE_NUMERIC_SETTINGS = Object.freeze({
+  initialRecoveryWaitMs: Object.freeze({
+    env: 'BILI_OFFICIAL_INITIAL_RECOVERY_WAIT_MS',
+    fallback: 210000,
+    min: 0,
+    max: 600000
+  }),
+  duplicateRetryMinMs: Object.freeze({
+    env: 'BILI_OFFICIAL_DUPLICATE_RETRY_MIN_MS',
+    fallback: 90000,
+    min: 1000,
+    max: 300000
+  }),
+  duplicateRetryMaxMs: Object.freeze({
+    env: 'BILI_OFFICIAL_DUPLICATE_RETRY_MAX_MS',
+    fallback: 300000,
+    min: 1000,
+    max: 600000
+  }),
+  lockRetryMs: Object.freeze({
+    env: 'BILI_OFFICIAL_LOCK_RETRY_MS',
+    fallback: 30000,
+    min: 1000,
+    max: 300000
+  }),
+  wssReconnectInitialMs: Object.freeze({
+    env: 'BILI_OFFICIAL_WSS_RECONNECT_INITIAL_MS',
+    fallback: 1000,
+    min: 100,
+    max: 30000
+  }),
+  wssReconnectMaxMs: Object.freeze({
+    env: 'BILI_OFFICIAL_WSS_RECONNECT_MAX_MS',
+    fallback: 30000,
+    min: 1000,
+    max: 120000
+  }),
+  eventDedupeTtlHours: Object.freeze({
+    env: 'BILI_OFFICIAL_EVENT_DEDUPE_TTL_HOURS',
+    fallback: 168,
+    min: 72,
+    max: 720
+  }),
+  aiMemoryHours: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_MEMORY_HOURS',
+    fallback: 72,
+    min: 72,
+    max: 72
+  }),
+  aiTimeoutMs: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_TIMEOUT_MS',
+    fallback: 10000,
+    min: 1000,
+    max: 10000
+  }),
+  aiMaxRetries: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_MAX_RETRIES',
+    fallback: 1,
+    min: 0,
+    max: 1
+  }),
+  aiMaxTokens: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_MAX_TOKENS',
+    fallback: 96,
+    min: 32,
+    max: 160
+  }),
+  aiGlobalConcurrency: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_GLOBAL_CONCURRENCY',
+    fallback: 2,
+    min: 1,
+    max: 2
+  }),
+  aiViewerCooldownMs: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_VIEWER_COOLDOWN_MS',
+    fallback: 15000,
+    min: 15000,
+    max: 60000
+  }),
+  aiQueueMax: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_QUEUE_MAX',
+    fallback: 20,
+    min: 1,
+    max: 100
+  }),
+  aiContextMaxMessages: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_CONTEXT_MAX_MESSAGES',
+    fallback: 12,
+    min: 2,
+    max: 20
+  }),
+  aiCleanupIntervalMs: Object.freeze({
+    env: 'BILI_OFFICIAL_AI_CLEANUP_INTERVAL_MS',
+    fallback: 3600000,
+    min: 60000,
+    max: 86400000
+  })
+});
+
 function parseInteger(value, definition) {
   const raw = value === undefined || value === null || value === ''
     ? String(definition.fallback)
@@ -228,12 +327,20 @@ function loadListenerServiceConfig(env = {}) {
     env.BILIBILI_GIFT_AUTO_CREDIT_ENABLED,
     'bilibili_gift_auto_credit_enabled'
   );
+  const officialLiveEnabled = parseBoolean(
+    env.BILI_OFFICIAL_LIVE_ENABLED,
+    'bili_official_live_enabled'
+  );
   if (giftAutoCreditEnabled) {
     throw listenerError('gift_auto_credit_not_authorized');
   }
   if (
     listenerEnabled &&
-    (!officialApiEnabled || !officialWssEnabled || !backendIngestEnabled)
+    (
+      !officialApiEnabled ||
+      !officialWssEnabled ||
+      (!backendIngestEnabled && !officialLiveEnabled)
+    )
   ) {
     throw listenerError('listener_feature_gate_incomplete');
   }
@@ -241,6 +348,7 @@ function loadListenerServiceConfig(env = {}) {
     listenerEnabled,
     officialApiEnabled,
     officialWssEnabled,
+    officialLiveEnabled,
     backendIngestEnabled,
     giftAutoCreditEnabled
   });
@@ -328,15 +436,106 @@ function loadOfficialBilibiliConfig(env = {}, {
   });
 }
 
+function loadOfficialLiveConfig(env = {}) {
+  const liveEnabled = parseBoolean(
+    env.BILI_OFFICIAL_LIVE_ENABLED,
+    'bili_official_live_enabled'
+  );
+  const aiEnabled = parseBoolean(
+    env.BILI_OFFICIAL_AI_ENABLED,
+    'bili_official_ai_enabled'
+  );
+  const businessEffectsEnabled = parseBoolean(
+    env.BILI_OFFICIAL_BUSINESS_EFFECTS_ENABLED,
+    'bili_official_business_effects_enabled'
+  );
+  if (businessEffectsEnabled) {
+    throw listenerError('official_business_effects_not_authorized');
+  }
+  const outputMode = String(
+    env.BILI_OFFICIAL_AI_OUTPUT_MODE || 'local_only'
+  ).trim();
+  if (outputMode !== 'local_only') {
+    throw listenerError('invalid_official_ai_output_mode');
+  }
+
+  const numeric = {};
+  for (const [key, definition] of Object.entries(
+    OFFICIAL_LIVE_NUMERIC_SETTINGS
+  )) {
+    numeric[key] = parseInteger(env[definition.env], definition);
+  }
+  if (numeric.duplicateRetryMaxMs < numeric.duplicateRetryMinMs) {
+    throw listenerError('invalid_official_duplicate_retry_range');
+  }
+  if (numeric.wssReconnectMaxMs < numeric.wssReconnectInitialMs) {
+    throw listenerError('invalid_official_wss_reconnect_range');
+  }
+
+  const eventHmacKey = liveEnabled
+    ? requiredCredential(env, 'BILI_EVENT_HMAC_KEY', {
+        minBytes: 32,
+        maxBytes: 512
+      })
+    : null;
+  const aiViewerHmacKey = aiEnabled
+    ? requiredCredential(env, 'AI_VIEWER_HMAC_KEY', {
+        minBytes: 32,
+        maxBytes: 512
+      })
+    : null;
+  const aiApiKey = aiEnabled
+    ? requiredCredential(env, 'AI_API_KEY', {
+        minBytes: 8,
+        maxBytes: 1024
+      })
+    : null;
+  const aiProvider = String(env.AI_PROVIDER || '').trim();
+  const aiBaseUrl = String(env.AI_BASE_URL || '').trim();
+  const aiModel = String(env.AI_MODEL || '').trim();
+  const aiApiProtocol = String(env.AI_API_PROTOCOL || '').trim();
+  if (
+    aiEnabled &&
+    (
+      aiProvider !== 'openai_compatible' ||
+      aiBaseUrl !== 'https://api.portkey.ai/v1' ||
+      aiModel !== '@siliconflow/minimax-m3' ||
+      aiApiProtocol !== 'chat_completions'
+    )
+  ) {
+    throw listenerError('invalid_official_ai_config');
+  }
+  if (aiEnabled && eventHmacKey === aiViewerHmacKey) {
+    throw listenerError('official_hmac_key_reuse_forbidden');
+  }
+
+  return Object.freeze({
+    liveEnabled,
+    aiEnabled,
+    businessEffectsEnabled,
+    outputMode,
+    eventHmacKey,
+    aiViewerHmacKey,
+    aiApiKey,
+    aiProvider,
+    aiBaseUrl,
+    aiModel,
+    aiApiProtocol,
+    ...numeric
+  });
+}
+
 module.exports = {
   CANONICAL_DECIMAL_PATTERN,
   INSTANCE_ID_PATTERN,
   MODES,
   NUMERIC_SETTINGS,
+  OFFICIAL_LIVE_NUMERIC_SETTINGS,
   OFFICIAL_NUMERIC_SETTINGS,
   canonicalSafeInteger,
   loadListenerConfig,
   loadListenerServiceConfig,
+  loadOfficialLiveConfig,
   loadOfficialBilibiliConfig,
   parseBoolean,
   parseInteger

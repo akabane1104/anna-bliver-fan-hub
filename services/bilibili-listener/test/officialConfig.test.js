@@ -4,7 +4,8 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
-  loadOfficialBilibiliConfig
+  loadOfficialBilibiliConfig,
+  loadOfficialLiveConfig
 } = require('../src/config');
 const { main, parseArguments } = require('../src/cli');
 const { createProductionRuntime } = require('../src/productionRuntime');
@@ -171,7 +172,7 @@ test('CLI official mode validates config before any network operation', async ()
   });
 });
 
-test('fixed Node 20 service script enables WebSocket and declares only zod', () => {
+test('fixed Node 20 service script enables WebSocket with audited runtime dependencies', () => {
   const packageJson = JSON.parse(fs.readFileSync(
     path.join(__dirname, '..', 'package.json'),
     'utf8'
@@ -180,7 +181,11 @@ test('fixed Node 20 service script enables WebSocket and declares only zod', () 
     packageJson.scripts.start,
     'node --experimental-websocket src/cli.js service'
   );
-  assert.deepEqual(packageJson.dependencies, { zod: '3.25.76' });
+  assert.deepEqual(Object.keys(packageJson.dependencies).sort(), [
+    'mysql2',
+    'openai',
+    'zod'
+  ]);
 });
 
 test('manual WSS environment values never alter runtime construction', () => {
@@ -240,6 +245,40 @@ test('manual WSS environment values never alter runtime construction', () => {
       socketFactory: 0,
       reconnectSchedules: 0
     });
+  }
+});
+
+test('official live and Portkey settings remain explicit and fail closed', () => {
+  const env = officialEnv({
+    BILI_OFFICIAL_LIVE_ENABLED: 'true',
+    BILI_OFFICIAL_AI_ENABLED: 'true',
+    BILI_OFFICIAL_BUSINESS_EFFECTS_ENABLED: 'false',
+    BILI_OFFICIAL_AI_OUTPUT_MODE: 'local_only',
+    BILI_EVENT_HMAC_KEY: 'synthetic-event-hmac-key-that-is-long-enough',
+    AI_VIEWER_HMAC_KEY: 'synthetic-viewer-hmac-key-that-is-long-enough',
+    AI_API_KEY: 'synthetic-portkey-key',
+    AI_PROVIDER: 'openai_compatible',
+    AI_BASE_URL: 'https://api.portkey.ai/v1',
+    AI_MODEL: '@siliconflow/minimax-m3',
+    AI_API_PROTOCOL: 'chat_completions'
+  });
+  const config = loadOfficialLiveConfig(env);
+  assert.equal(config.liveEnabled, true);
+  assert.equal(config.aiEnabled, true);
+  assert.equal(config.aiBaseUrl, 'https://api.portkey.ai/v1');
+  assert.equal(config.aiModel, '@siliconflow/minimax-m3');
+  for (const patch of [
+    { AI_BASE_URL: 'https://api.openai.com/v1' },
+    { AI_MODEL: 'minimax-m3' },
+    { AI_API_PROTOCOL: 'responses' },
+    { BILI_OFFICIAL_AI_OUTPUT_MODE: 'public' },
+    { BILI_OFFICIAL_BUSINESS_EFFECTS_ENABLED: 'true' },
+    {
+      AI_VIEWER_HMAC_KEY:
+        'synthetic-event-hmac-key-that-is-long-enough'
+    }
+  ]) {
+    assert.throws(() => loadOfficialLiveConfig({ ...env, ...patch }));
   }
 });
 

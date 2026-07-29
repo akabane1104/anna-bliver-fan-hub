@@ -8,6 +8,8 @@
     "node": ">=20"
   },
   "dependencies": {
+    "mysql2": "^3.23.2",
+    "openai": "6.16.0",
     "zod": "3.25.76"
   },
   "scripts": {

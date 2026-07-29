@@ -232,6 +232,77 @@ test('invalid service gates stay alive as an unhealthy configuration error', asy
   }
 });
 
+test('waiting service refreshes one shared health path until its main loop fails', async () => {
+  const dataDir = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'listener-waiting-health-')
+  );
+  let now = Date.parse('2026-07-30T00:00:00.000Z');
+  let runtimeState = 'WAITING_FOR_OFFICIAL_SESSION';
+  let scheduledHealth = null;
+  try {
+    const service = createServiceRuntime({
+      env: {
+        LISTENER_DATA_DIR: dataDir,
+        BILIBILI_LISTENER_ENABLED: 'true',
+        BILIBILI_OFFICIAL_API_ENABLED: 'true',
+        BILIBILI_OFFICIAL_WSS_ENABLED: 'true',
+        BILI_OFFICIAL_LIVE_ENABLED: 'true',
+        LIVE_EVENT_INGEST_ENABLED: 'false',
+        BILIBILI_GIFT_AUTO_CREDIT_ENABLED: 'false'
+      },
+      clock: () => now,
+      async lockFactory() {
+        return { async release() {} };
+      },
+      runtimeFactory() {
+        return {
+          async start() {},
+          async stop() {},
+          snapshot() {
+            return { state: runtimeState };
+          }
+        };
+      },
+      setTimer(callback) {
+        scheduledHealth = callback;
+        return 1;
+      },
+      clearTimer() {
+        scheduledHealth = null;
+      }
+    });
+    const started = await service.start();
+    assert.equal(started.state, 'waiting_for_official_session');
+    assert.equal(started.healthy, true);
+    assert.equal(readHealthSnapshot(dataDir, {
+      clock: () => now
+    }).state, 'waiting_for_official_session');
+
+    now += 55000;
+    const refresh = scheduledHealth;
+    refresh();
+    assert.equal(readHealthSnapshot(dataDir, {
+      clock: () => now
+    }).state, 'waiting_for_official_session');
+
+    now += 61000;
+    assert.throws(
+      () => readHealthSnapshot(dataDir, { clock: () => now }),
+      { code: 'listener_unhealthy' }
+    );
+
+    runtimeState = 'FAILED';
+    scheduledHealth();
+    assert.throws(
+      () => readHealthSnapshot(dataDir, { clock: () => now }),
+      { code: 'listener_unhealthy' }
+    );
+    await service.stop();
+  } finally {
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
 test('service releases its instance lock when runtime shutdown fails', async () => {
   const dataDir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'listener-stop-failure-')
