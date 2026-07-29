@@ -60,10 +60,6 @@ const AuthVerifier = () => {
   return <SessionExpiredModal isOpen={isSessionExpired} onClose={handleClose} />;
 };
 
-const AdminRoute = ({ children }) => (
-  <ProtectedRoute adminOnly={true}>{children}</ProtectedRoute>
-);
-
 const PermissionRoute = ({ permission, children }) => (
   <ProtectedRoute requiredPermissions={[permission]}>{children}</ProtectedRoute>
 );
@@ -128,7 +124,7 @@ function AppRoutes() {
           <Route path="/prizes" element={<ProtectedRoute><Prizes /></ProtectedRoute>} />
           <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
           <Route path="/admin/marshmallows" element={<ProtectedRoute requiredPermissions={['marshmallow.manage']}><MarshmallowAdmin /></ProtectedRoute>} />
-          <Route path="/admin/permissions" element={<AdminRoute><PermissionManagement /></AdminRoute>} />
+          <Route path="/admin/permissions" element={<PermissionRoute permission="viewer_identity.manage"><PermissionManagement /></PermissionRoute>} />
           <Route path="/admin/points" element={<PermissionRoute permission="points.manage"><AdminPoints /></PermissionRoute>} />
           <Route path="/admin/prizes" element={<PermissionRoute permission="prize.manage"><AdminPrizes /></PermissionRoute>} />
           <Route path="/admin/prizes/new" element={<PermissionRoute permission="prize.manage"><AdminPrizes /></PermissionRoute>} />

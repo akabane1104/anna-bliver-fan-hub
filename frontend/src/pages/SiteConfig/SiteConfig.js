@@ -6,7 +6,8 @@ import {
 } from '../../constants/siteTheme';
 import BrandMark from '../../components/BrandMark';
 import { usePageTitle, useSiteSettings } from '../../context/SiteSettingsContext';
-import { settingsService } from '../../services';
+import { authService, settingsService } from '../../services';
+import { isAdminRole } from '../../constants/roles';
 import './SiteConfig.css';
 
 const DEFAULT_FORM = SITE_SETTINGS_DEFAULTS;
@@ -44,6 +45,7 @@ function SiteConfig() {
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [error, setError] = useState('');
   const [successMessage, setSuccessMessage] = useState('');
+  const canEditIdentityTarget = isAdminRole(authService.getCurrentUser()?.role);
 
   usePageTitle('网站配置');
 
@@ -125,7 +127,12 @@ function SiteConfig() {
       setError('');
       setSuccessMessage('');
 
-      const response = await settingsService.updateSiteConfig(formData);
+      const payload = canEditIdentityTarget
+        ? formData
+        : Object.fromEntries(
+          Object.entries(formData).filter(([field]) => field !== 'bilibiliUid')
+        );
+      const response = await settingsService.updateSiteConfig(payload);
       if (response.config) {
         setSiteSettings(response.config);
       }
@@ -292,7 +299,13 @@ function SiteConfig() {
 
           <label className="site-config-field">
             <span>B站 UP UID</span>
-            <input type="text" value={formData.bilibiliUid} onChange={(e) => handleChange('bilibiliUid', e.target.value)} />
+            <input
+              type="text"
+              value={formData.bilibiliUid}
+              onChange={(e) => handleChange('bilibiliUid', e.target.value)}
+              disabled={!canEditIdentityTarget}
+              title={canEditIdentityTarget ? '' : '仅管理员可以修改目标主播 UID'}
+            />
           </label>
 
           <label className="site-config-field">

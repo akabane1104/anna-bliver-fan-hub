@@ -488,12 +488,12 @@
   color: var(--white);
 }
 
-.permission-management .role-badge.premium {
+.permission-management .role-badge.streamer {
   background: var(--warning-color);
   color: var(--white);
 }
 
-.permission-management :is(.role-badge.user, .limit-badge) {
+.permission-management :is(.role-badge.fan_club, .limit-badge) {
   background: var(--theme-card-surface-alt);
   color: var(--text-light);
 }

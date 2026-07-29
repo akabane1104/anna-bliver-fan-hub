@@ -72,7 +72,7 @@ describe('live administration route guards', () => {
 
   test('the live console direct URL uses the same permission boundary', async () => {
     mockAuthService.isAuthenticated.mockReturnValue(true);
-    mockAuthService.getCurrentUser.mockReturnValue({ role: 'user' });
+    mockAuthService.getCurrentUser.mockReturnValue({ role: 'fan_club' });
     mockPermissionService.getMyPermissions.mockResolvedValue({
       permissions: ['live_control.manage']
     });
@@ -82,7 +82,7 @@ describe('live administration route guards', () => {
 
   test('permission loading never reveals admin content', async () => {
     mockAuthService.isAuthenticated.mockReturnValue(true);
-    mockAuthService.getCurrentUser.mockReturnValue({ role: 'user' });
+    mockAuthService.getCurrentUser.mockReturnValue({ role: 'fan_club' });
     mockPermissionService.getMyPermissions.mockReturnValue(new Promise(() => {}));
     await render('/admin/live-events');
     expect(container.textContent).toContain('加载中');
@@ -91,7 +91,7 @@ describe('live administration route guards', () => {
 
   test('unauthorized users are blocked from both routes', async () => {
     mockAuthService.isAuthenticated.mockReturnValue(true);
-    mockAuthService.getCurrentUser.mockReturnValue({ role: 'user' });
+    mockAuthService.getCurrentUser.mockReturnValue({ role: 'fan_club' });
     mockPermissionService.getMyPermissions.mockResolvedValue({ permissions: [] });
     await render('/admin/live-status');
     expect(container.textContent).toContain('public-home');
@@ -109,11 +109,42 @@ describe('live administration route guards', () => {
 
     act(() => root.unmount());
     root = createRoot(container);
-    mockAuthService.getCurrentUser.mockReturnValue({ role: 'user' });
+    mockAuthService.getCurrentUser.mockReturnValue({ role: 'fan_club' });
     mockPermissionService.getMyPermissions.mockResolvedValue({
       permissions: ['live_control.manage']
     });
     await render('/admin/live-events');
     expect(container.textContent).toContain('private-live-admin');
+  });
+
+  test('streamer uses effective capabilities but cannot enter admin-only routes', async () => {
+    mockAuthService.isAuthenticated.mockReturnValue(true);
+    mockAuthService.getCurrentUser.mockReturnValue({ role: 'streamer' });
+    mockPermissionService.getMyPermissions.mockResolvedValue({
+      role: 'streamer',
+      permissions: ['live_control.manage']
+    });
+    await render('/admin/live-control');
+    expect(container.textContent).toContain('private-live-admin');
+
+    act(() => root.unmount());
+    root = createRoot(container);
+    await act(async () => {
+      root.render(
+        <MemoryRouter initialEntries={['/admin/permissions']}>
+          <Routes>
+            <Route path="/" element={<div>public-home</div>} />
+            <Route path="/admin/permissions" element={(
+              <ProtectedRoute adminOnly>
+                <div>private-permissions</div>
+              </ProtectedRoute>
+            )} />
+          </Routes>
+        </MemoryRouter>
+      );
+      await flush();
+    });
+    expect(container.textContent).toContain('public-home');
+    expect(container.textContent).not.toContain('private-permissions');
   });
 });

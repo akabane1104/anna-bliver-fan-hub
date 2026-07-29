@@ -84,6 +84,37 @@ settings 表 > 后端环境变量 > 代码默认值
 
 多实例部署时，应将临时二维码会话迁移到带 TTL 的共享存储，或保证同一会话固定路由到同一后端实例。
 
+## 观众身份同步
+
+身份同步复用 `user_bilibili_bindings`，不建立第二套账号或 UID 绑定。每个绑定
+独立保存目标主播／直播间、粉丝勋章、大航海等级、成功与失败时间、下一次对账
+时间、单调版本及临时补录；`viewer_identity_audit` 保存非敏感的同步和补录轨迹。
+`users.role` 只由后端在事务内根据全部已验证绑定重新计算：
+
+```text
+validated UID binding
+  -> identity provider (target room enforced)
+  -> per-binding medal + guard state
+  -> explicit highest guard mapping
+  -> users.role (viewer roles only)
+```
+
+`guard_level` 的平台语义是 1 总督、2 提督、3 舰长、0 无有效大航海，不能按数字
+大小推导权限。四种观众角色共享同一空基础 capability 集；主播和管理员角色受
+保护，自动任务不覆盖。鉴权中间件每次从数据库重新读取角色，旧 JWT 中的角色
+只作为签发时快照。
+
+同步使用持久化 `next_sync_at` 与有界退避，服务重启后继续处理到期任务。超时、
+限流、5xx、格式异常或不完整分页只记录非敏感错误码，并保留最后一次成功身份。
+较旧响应通过 `identity_version` 和 `identity_observed_at` 拒绝。Listener 的可信
+`guard_buy` 只在目标直播间、已建立 open ID 映射且存在可持续对账 provider 时
+快速更新；它不能成为唯一身份来源。
+
+当前仓库没有可验证的正式目标直播间身份 provider，也没有把扫码 UID 映射为
+官方开放平台 open ID 的可信来源。默认 provider 因此无网络、fail closed，正式
+自动识别仍需另行提供服务器端只读数据源；不得使用前端结果、网页 HTML 抓取或
+长期保存普通用户 Cookie 代替。
+
 ## 信任边界
 
 - 浏览器输入、Bot 事件和第三方 API 响应均视为不可信数据。
@@ -145,7 +176,7 @@ live_events -- accepted danmaku --> strict command parser
 
 backend 仍是唯一数据库写入者。首次 accepted 的 `danmaku` 与其派生 `song_request` 在同一个 MySQL 事务中提交；解析、匹配或请求写入失败时，`live_event` 也会回滚，因此不会留下无法恢复的半条数据。duplicate 与 conflict 不再次解析，`source_event_id` 唯一约束提供第二层幂等保护。普通弹幕及 gift、super_chat、guard_buy、like、room_enter、live_start、live_end 不创建请求。
 
-所有观众请求进入同一条队列。公开层只有 `点歌`/`點歌`，不存在播放指令或背景播放队列。`sung` 与 `played` 只是主播处理时设置的内部 `fulfillment_type`；请求建立时固定为 `undecided`。
+所有观众请求进入同一条队列。公开层只有简体或繁体“点歌”命令，不存在播放指令或背景播放队列。`sung` 与 `played` 只是主播处理时设置的内部 `fulfillment_type`；请求建立时固定为 `undecided`。
 
 简繁处理只作用于命令前缀与歌曲/别名匹配键。数据库歌曲、歌手、别名原文及弹幕原文不会被覆盖，前端也不执行全站转换。匹配先做大小写敏感的原文精确比较，再依次使用 NFKC/空白、简繁脚本键、别名原文与别名脚本键。包含匹配及英文大小写折叠只产生最多五个候选，不会自动选歌；因此 `fancy` 与 `FANCY` 可分别精确命中，而 `Fancy` 必须人工确认。
 

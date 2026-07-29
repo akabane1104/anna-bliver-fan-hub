@@ -9,12 +9,13 @@ import {
 } from '../services';
 import { useSiteSettings } from '../context/SiteSettingsContext';
 import usePollingResource from '../utils/usePollingResource';
+import { isAdminRole } from '../constants/roles';
 
 const featureIcons = {
   playlists: '🎵', marshmallows: '🍬', prizes: '🎁',
   siteConfig: '🎨', pointsAdmin: '⭐', prizesAdmin: '🎁',
   ordersAdmin: '📋', permissions: '🔐', songControl: '🎙️',
-  liveControl: '🎛️'
+  liveControl: '🎛️', marshmallowsAdmin: '🍬', obsOverlays: '📺'
 };
 
 const liveHomeInterval = (data) => data?.refresh_after_ms || 30000;
@@ -25,7 +26,7 @@ function Home() {
   const [permissions, setPermissions] = useState([]);
   const currentUser = authService.getCurrentUser();
   const isAuthenticated = authService.isAuthenticated();
-  const isAdmin = isAuthenticated && currentUser?.role === 'admin';
+  const isAdmin = isAuthenticated && isAdminRole(currentUser?.role);
   const canManage = (permission) => isAdmin || permissions.includes(permission);
   const loadLiveHome = useCallback(
     ({ signal }) => liveHomeService.getHome({ signal }),
@@ -60,15 +61,29 @@ function Home() {
     ...(isAuthenticated ? [{ key: 'prizes', to: '/prizes', title: siteSettings.prizeCardTitle, description: siteSettings.prizeCardDescription }] : []),
     ...(canManage(permissionService.PERMISSIONS.SITE_CONFIG_MANAGE) ? [{ key: 'siteConfig', to: '/admin/site-config', title: '网站配置', description: '管理站点资料、首页文案与主题样式。', admin: true }] : []),
     ...(canManage(permissionService.PERMISSIONS.POINTS_MANAGE) ? [{ key: 'pointsAdmin', to: '/admin/points', title: '积分管理', description: '管理用户积分、导入记录和投喂折算。', admin: true }] : []),
+    ...(canManage(permissionService.PERMISSIONS.MARSHMALLOW_MANAGE) ? [{ key: 'marshmallowsAdmin', to: '/admin/marshmallows', title: '棉花糖管理', description: '查看、认领、回复并管理收到的棉花糖。', admin: true }] : []),
     ...(canManage(permissionService.PERMISSIONS.PRIZE_MANAGE) ? [
       { key: 'prizesAdmin', to: '/admin/prizes', title: '兑换商品管理', description: '创建商品、维护图片、价格、库存和选项。', admin: true },
       { key: 'ordersAdmin', to: '/admin/prize-orders', title: '兑换订单管理', description: '处理兑换订单、收货信息和退款状态。', admin: true }
     ] : []),
     ...(canManage(permissionService.PERMISSIONS.LIVE_CONTROL_MANAGE) ? [
       { key: 'liveControl', to: '/admin/live-control', title: '直播中控', description: '控制直播首页、点歌开关和当前演唱进度。', admin: true },
-      { key: 'songControl', to: '/admin/song-requests', title: '点歌控制', description: '管理统一点歌队列、场次和历史记录。', admin: true }
+      { key: 'songControl', to: '/admin/song-requests', title: '点歌控制', description: '管理统一点歌队列、场次和历史记录。', admin: true },
+      { key: 'obsOverlays', to: '/admin/obs-overlays', title: 'OBS 元件', description: '预览直播元件并触发安全的测试事件。', admin: true }
     ] : []),
-    ...(isAdmin ? [{ key: 'permissions', to: '/admin/permissions', title: '权限管理', description: '管理用户角色、功能权限和注册开关。', admin: true }] : [])
+    ...(isAdmin ? [{
+      key: 'permissions',
+      to: '/admin/permissions',
+      title: '权限管理',
+      description: '管理用户角色、功能权限、身份同步和注册开关。',
+      admin: true
+    }] : canManage(permissionService.PERMISSIONS.VIEWER_IDENTITY_MANAGE) ? [{
+      key: 'permissions',
+      to: '/admin/permissions',
+      title: '观众身份管理',
+      description: '查看观众身份同步状态并处理临时补录。',
+      admin: true
+    }] : [])
   ];
 
   return (

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Navigate } from 'react-router';
 import { authService, permissionService } from '../services';
+import { isAdminRole } from '../constants/roles';
 
 function ProtectedRoute({ children, adminOnly = false, requiredPermissions = [] }) {
   const [loading, setLoading] = useState(true);
@@ -17,7 +18,7 @@ function ProtectedRoute({ children, adminOnly = false, requiredPermissions = [] 
       }
 
       // Admin always has access
-      if (user?.role === 'admin') {
+      if (isAdminRole(user?.role)) {
         setHasAccess(true);
         setLoading(false);
         return;

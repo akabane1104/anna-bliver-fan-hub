@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import readXlsxFile from 'read-excel-file';
+import { isAdminRole } from '../constants/roles';
 import { playlistService, authService, permissionService, songRequestService } from '../services';
 import BackButton from '../components/BackButton';
 import PublicSongQueue from '../components/PublicSongQueue';
@@ -209,7 +210,7 @@ function Playlists() {
 
   useEffect(() => {
     if (currentUser) {
-      if (currentUser.role === 'admin') {
+      if (isAdminRole(currentUser.role)) {
         setCanEdit(true);
       } else {
         permissionService.getMyPermissions().then(perms => {

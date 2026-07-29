@@ -7,13 +7,13 @@
 
 ## 安装路径
 
-`backend/src/config/schema.sql` 只用于全新空数据库。它创建 30 张业务表及初始站点
-设置；migration 另建立 1 张 `schema_migrations` 帐本表，完整状态合计 31 张。
+`backend/src/config/schema.sql` 只用于全新空数据库。它创建 31 张业务表及初始站点
+设置；migration 另建立 1 张 `schema_migrations` 帐本表，完整状态合计 32 张。
 Docker 的初始化挂载也只会在全新空 MySQL volume 首次启动时执行该文件。
 
 全新安装在执行 `schema.sql` 后，仍应执行版本化迁移的 `apply` 与 `postcheck`。
-迁移会严格核对五张 Phase 4B/4C 表、两张 Phase 4I 延伸表及一张 Phase 4J
-OBS 事件表，创建
+迁移会严格核对五张 Phase 4B/4C 表、两张 Phase 4I 延伸表、一张 Phase 4J
+OBS 事件表及一张观众身份审计表，创建
 `schema_migrations` 帐本，并将完全相符的结构登记为已应用，不会重建这些表。
 
 既有 22 表安装不得再次执行完整 `schema.sql`，必须使用本文件的迁移命令。
@@ -26,6 +26,8 @@ OBS 事件表，创建
 | `202607240002` | `live_events_received_at_index` | 为 `live_events` 新增 `idx_live_event_received (received_at, id)` |
 | `202607240003` | `phase_4i_song_request_experience` | 新增 `song_request_policies`、`song_request_details`，并为 B站 binding 与全域歌曲别名加入 additive column/index |
 | `202607240004` | `phase_4j_obs_overlays` | 新增 `obs_overlay_events`，保存短期、可重播、可去重的 OBS 画面事件 |
+| `202607240005` | `six_role_rbac` | 将旧 `user`／`premium` 角色迁移为六角色 Enum |
+| `202607240006` | `viewer_identity_sync` | 扩展既有 UID 绑定身份字段并新增 `viewer_identity_audit` |
 
 建立顺序为：
 
@@ -58,6 +60,14 @@ nullable、default、主键、唯一约束、索引、外键、engine、charset 
 `bilibili_point_events` 或积分表，也不会启用任何 B站来源；`source` 只是事件来源
 分类，正式 B站与 AI 产生器仍未接线。
 
+第五份迁移保留用户主键和全部关系，只把 `user` 映射为 `fan_club`、`premium`
+映射为 `streamer`，管理员保持 `admin`。未知角色在 preflight 阶段 fail closed。
+
+第六份迁移只扩展现有 `user_bilibili_bindings`，保存每个 UID 的目标主播、
+粉丝勋章、大航海、同步版本／状态／时间和临时补录信息，并新增
+`viewer_identity_audit`。每个 column、index 和外键在执行前独立检查，支持部分
+完成后的安全重跑；不删除或重建用户、绑定、积分、订单及其他业务资料。
+
 ## Migration catalog
 
 Runner 只读取 `backend/migrations` 目录中符合
@@ -71,9 +81,16 @@ Backend 最终 Docker image 将该目录复制到 `/app/migrations`，与 Runner
 catalog 和数据库连接环境，不会在 Backend 启动时自动执行 migration。
 
 `202607240002` 明确依赖 `202607240001`，`202607240003` 依赖前两份，
-`202607240004` 依赖 `202607240003`。空白／22 表安装依次执行 R1、R4、
-Phase 4I 与 Phase 4J；已登记的前置版本保持 no-op。每一份 migration
+`202607240004` 依赖 `202607240003`，`202607240005` 依赖
+`202607240004`，`202607240006` 再依赖 `202607240005`。空白／22 表安装依次
+执行 R1、R4、Phase 4I、Phase 4J、六角色 RBAC 与观众身份同步迁移；已登记的
+前置版本保持 no-op。每一份 migration
 只有在 DDL 与独立 postcheck 成功后才写入自己的 ledger row。
+
+`202607240005` 先扩展 `users.role` Enum，再将 `user` 映射为 `fan_club`、
+将 `premium` 映射为 `streamer`，最后收敛为六个正式角色并把默认值设为
+`fan_club`。未知角色会在 preflight 阶段 fail closed；用户 ID 及所有关联数据
+保持不变，重复执行会由 migration ledger 明确 no-op。
 
 ## 帐本与并发
 
@@ -123,7 +140,7 @@ docker compose --env-file .env run --rm --no-deps backend npm run db:migrate:pos
 
 - `status`：按顺序显示全部版本、checksum、帐本状态与资源状态。
 - `preflight`：检查 MySQL 8.0、数据库名称及 collation、22 张依赖表、必要主键、
-  advisory lock、帐本 checksum，以及八张目标表和全部 additive 索引是否缺少或完全相符。
+  advisory lock、帐本 checksum，以及九张目标表和全部 additive 索引是否缺少或完全相符。
 - `apply`：取得 lock，按版本执行或采用迁移，逐份严格验证后才登记成功。
 - `postcheck`：要求每份迁移均已登记，并重新验证完整结构与索引。
 
@@ -149,7 +166,7 @@ docker compose --env-file .env run --rm --no-deps backend npm run db:migrate:pos
 ### Application rollback
 
 停止使用新 API/UI 的应用版本，将 Backend 与 Frontend 回退至迁移前兼容版本。
-八张新业务表、additive 索引、`schema_migrations` 及其中数据全部保留。迁移前版本会忽略额外表，
+九张新业务表、additive 索引、`schema_migrations` 及其中数据全部保留。迁移前版本会忽略额外表，
 不需要也不得删除它们。
 
 ### Feature disable
@@ -192,8 +209,9 @@ R4 隔离测试另覆盖：
 - `received_at DESC, id DESC` 与最近时间范围的真实 MySQL `EXPLAIN`。
 
 Phase 4I 隔离测试另覆盖两张延伸表、binding open ID、全域 alias 唯一索引及
-partial-rerun；Phase 4J 再覆盖 OBS 事件表与 source idempotency。升级完成后为
-30 张业务表加 1 张 ledger 表。
+partial-rerun；Phase 4J 再覆盖 OBS 事件表与 source idempotency。六角色迁移
+验证旧角色映射，观众身份迁移验证 binding additive 字段、索引、外键及审计表。
+升级完成后为 31 张业务表加 1 张 ledger 表。
 
 测试只使用随机 loopback 端口、tmpfs 的临时 MySQL 8 容器及纯合成数据；容器已在
 测试结束后精确清理。该证据不等于已经授权正式数据库部署。

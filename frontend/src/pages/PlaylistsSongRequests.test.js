@@ -112,7 +112,7 @@ describe('Playlists song request integration', () => {
   beforeEach(() => {
     global.IS_REACT_ACT_ENVIRONMENT = true;
     jest.clearAllMocks();
-    mockAuthService.getCurrentUser.mockReturnValue({ id: 42, role: 'user', username: 'Synthetic Viewer' });
+    mockAuthService.getCurrentUser.mockReturnValue({ id: 42, role: 'fan_club', username: 'Synthetic Viewer' });
     mockAuthService.isAuthenticated.mockReturnValue(true);
     mockPermissionService.getMyPermissions.mockResolvedValue({ permissions: [] });
     mockPlaylistService.getAllSongs.mockResolvedValue(songs);

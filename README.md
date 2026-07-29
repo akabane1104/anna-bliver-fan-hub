@@ -91,7 +91,7 @@ Linux、macOS、Git Bash：
 mysql -u root -p < backend/src/config/schema.sql
 ```
 
-SQL 会为全新空数据库创建 `anna_bliver_fan_hub` 和 30 张业务表；执行 migration 后另有 1 张 `schema_migrations` 帐本表，合计 31 张。SQL 不会替你创建 MySQL 登录用户。既有数据库不得重跑完整 `schema.sql`，必须先备份，再依次执行 migration 的 `preflight`、`apply` 与 `postcheck`。最简单的本地方式是将后端 `.env` 的 `DB_USER` 改为已有的 MySQL 用户；独立数据库用户、Docker migration 与完整升级流程见 [部署文档](docs/DEPLOYMENT.md#数据库账号)。
+SQL 会为全新空数据库创建 `anna_bliver_fan_hub` 和 31 张业务表；执行 migration 后另有 1 张 `schema_migrations` 帐本表，合计 32 张。SQL 不会替你创建 MySQL 登录用户。既有数据库不得重跑完整 `schema.sql`，必须先备份，再依次执行 migration 的 `preflight`、`apply` 与 `postcheck`。最简单的本地方式是将后端 `.env` 的 `DB_USER` 改为已有的 MySQL 用户；独立数据库用户、Docker migration 与完整升级流程见 [部署文档](docs/DEPLOYMENT.md#数据库账号)。
 
 ### 3. 创建本地配置
 
@@ -158,7 +158,9 @@ DEMO_ADMIN_PASSWORD='replace-with-a-local-password' npm run seed:demo
 
 ## 角色与权限
 
-管理员始终拥有所有权限，并可给普通用户或高级用户分配：
+角色按固定顺序显示为粉丝团、舰长、提督、总督、主播、管理员。四种观众角色
+是彼此独立的角色值，但共享相同的基础权限；新注册用户默认为粉丝团。主播
+自动拥有日常运营权限，管理员始终拥有全部权限。
 
 | 权限 | 能力 |
 | --- | --- |
@@ -166,9 +168,21 @@ DEMO_ADMIN_PASSWORD='replace-with-a-local-password' npm run seed:demo
 | `marshmallow.manage` | 查看、回复、标记与删除棉花糖 |
 | `points.manage` | 积分账号、流水、导入、调整和结算 |
 | `prize.manage` | 商品、图片、库存、订单和退款 |
-| `site_config.manage` | 站点资料、主题、Logo 与注册开关 |
+| `site_config.manage` | 站点资料、主题、Logo 与 favicon |
+| `live_control.manage` | 直播中控、点歌控制和 OBS 元件测试 |
 
-权限管理本身只允许管理员进入，并禁止降级最后一个管理员。
+管理员可为单个用户追加上述权限。注册开关、角色与权限管理仍只允许管理员
+进入，并禁止降级最后一个管理员；主播不能指派管理员或修改权限矩阵。
+
+观众角色可以从已验证的 B 站 UID 身份资料重新计算。每个绑定分别保存目标主播、
+粉丝勋章、大航海等级、同步状态和时间；同一网站账号最多五个 UID，最终角色取
+全部有效绑定中的总督、提督、舰长或粉丝团。主播只能在自动识别失败时临时补录
+四种观众角色，不能修改主播、管理员、权限矩阵或同步系统配置。
+
+仓库当前没有经过验证、可持续查询目标直播间大航海名单和到期状态的正式数据源。
+默认身份 provider 因此保持不可用并禁止自动降级；可信 Listener 事件也只有在
+另有可持续对账 provider 时才可作为快速更新路径。管理员完成正式数据源和凭证
+接线前，不得把该结构视为已经上线的自动识别服务。
 
 ## bili-bot 预留接口
 

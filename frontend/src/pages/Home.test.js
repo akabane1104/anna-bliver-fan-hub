@@ -20,6 +20,7 @@ jest.mock('../services', () => ({
       SITE_CONFIG_MANAGE: 'site_config.manage',
       POINTS_MANAGE: 'points.manage',
       PRIZE_MANAGE: 'prize.manage',
+      MARSHMALLOW_MANAGE: 'marshmallow.manage',
       LIVE_CONTROL_MANAGE: 'live_control.manage'
     }
   }

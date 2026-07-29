@@ -13,7 +13,7 @@
 Cookie、二维码登录或浏览器资料，也不直接连接 MySQL。
 
 弹幕点歌仍由 Backend 既有 parser 和同一个 `song_requests` queue 处理，只接受
-`点歌` 与 `點歌`。来源为 `bilibili_danmaku`。Listener 没有任何 B站输出能力。
+简体或繁体“点歌”命令。来源为 `bilibili_danmaku`。Listener 没有任何 B站输出能力。
 
 ## 官方契约
 
@@ -114,6 +114,13 @@ Guard 只入既有 `live_events`、参与幂等与安全公开摘要，不会写
 与 90 秒 grace 判定；Docker healthy 或 WSS heartbeat 本身不会被解释为主播开播。
 事件名称与字段依 [B站直播开放平台事件文件](https://open-live.bilibili.com/document/f9ce25be-312e-1f4a-85fd-fef21f1637f8)
 于 2026-07-26 核对；未知 CMD 仍明确忽略，不推测文件未记载的字段。
+
+`LIVE_OPEN_PLATFORM_GUARD` 只能作为观众身份的快速更新信号。Backend 仅在事件
+来自配置的目标直播间、绑定已具有可信 `bilibili_open_id` 映射，并且另有可持续
+对账 provider 时更新该绑定；没有对账 provider 时明确忽略，避免一次购买事件
+把角色永久保留。官方事件不提供本实现可依赖的精确到期确认，也不提供数字 UID
+与 open ID 的可信自动映射，因此 Listener 不能替代绑定后的身份查询或定期对账。
+粉丝勋章等级不参与权限计算。
 
 Disabled 模式不会读取 B站凭据、不会建立 runtime、不会接触官方 REST/WSS，
 但进程和 healthcheck 正常运行，不形成 restart storm。

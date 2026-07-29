@@ -48,6 +48,37 @@ B站凭据或建立网络连接。
 `open_id` 网站账号映射，礼物只做可靠入库和幂等，不自动增加积分。完整契约见
 [B站 Listener](BILIBILI_LISTENER.md)。
 
+## B站观众身份对账
+
+观众身份 provider 默认关闭。只有服务器维护者明确设置
+`VIEWER_IDENTITY_PROVIDER=guard_tab_top_list` 时，Backend 才会匿名读取目标
+直播间的未公开大航海名单接口。该接口没有官方稳定性、完整性、匿名用户覆盖、
+限流或 SLA 保证；四种观众角色仍共用同一组基础 capability，不产生积分、商城
+优惠或额外系统权限。
+
+| 变量 | 默认值 | 说明 |
+| --- | --- | --- |
+| `VIEWER_IDENTITY_PROVIDER` | 空 | 空值安全失败；唯一受支持的显式值为 `guard_tab_top_list` |
+| `VIEWER_IDENTITY_PROVIDER_KILL_SWITCH` | `false` | 改为 `true` 后立即回到未配置状态 |
+| `VIEWER_IDENTITY_TARGET_ANCHOR_UID` | `24856973` | 服务器专用目标主播 UID |
+| `VIEWER_IDENTITY_TARGET_ROOM_ID` | `1881089295` | 服务器专用目标直播间 ID |
+| `VIEWER_IDENTITY_RECONCILE_INTERVAL_MS` | `60000` | 到期任务扫描周期，不代表每次都请求上游 |
+| `VIEWER_IDENTITY_FRESHNESS_MS` | `300000` | 成功身份的最长正常新鲜时间 |
+| `VIEWER_IDENTITY_SNAPSHOT_CACHE_MS` | `240000` | 完整名单快照缓存时间 |
+| `VIEWER_IDENTITY_DOWNGRADE_CONFIRM_DELAY_MS` | `1000` | 降级前第二次独立完整读取的基础等待 |
+| `VIEWER_IDENTITY_GUARD_PAGE_SIZE` | `29` | 名单分页大小 |
+| `VIEWER_IDENTITY_GUARD_MAX_PAGES` | `500` | 分页安全上限 |
+| `VIEWER_IDENTITY_HTTP_TIMEOUT_MS` | `5000` | 单页匿名 GET 超时 |
+| `VIEWER_IDENTITY_HTTP_MAX_RETRIES` | `2` | 单页有限重试次数 |
+| `VIEWER_IDENTITY_HTTP_RETRY_BASE_MS` | `500` | 指数退避基础时间 |
+| `VIEWER_IDENTITY_HTTP_MAX_RETRY_AFTER_MS` | `300000` | 可在当前请求内遵守的最大 `Retry-After` |
+
+名单读取按数字 UID 去重，并同时验证 `top3`、全部分页、页码、总页数和唯一数量。
+升级可由一份完整快照立即确认；名单消失或身份降低必须由第二份独立完整快照确认。
+任一请求、分页或复核失败都会保留上次成功身份。该来源没有精确到期时间，正常
+确认目标约为五分钟。Listener 的 `open_id` 尚不能可信映射到网站数字 UID，因此
+不参与观众身份更新。
+
 ## 站点默认值
 
 管理员保存到 `settings` 表的值优先于以下变量。

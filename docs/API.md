@@ -77,14 +77,43 @@
 | 方法 | 路径 | 访问 | 说明 |
 | --- | --- | --- | --- |
 | `GET` | `/permissions/types` | 登录 | 可分配权限类型 |
-| `GET` | `/permissions/my` | 登录 | 当前角色与显式权限 |
+| `GET` | `/permissions/my` | 登录 | 当前角色、角色默认权限与用户显式权限 |
 | `GET` | `/permissions/users` | 管理员 | 用户及权限 |
 | `GET/PUT` | `/permissions/users/:id` | 管理员 | 查看或更新角色和权限 |
+
+角色 key 固定为 `fan_club`、`captain`、`admiral`、`governor`、
+`streamer`、`admin`。前四种观众角色共享基础权限；`streamer` 默认取得歌单、
+棉花糖、商城、积分、安全品牌设置、直播中控和 OBS 测试能力。角色与权限管理、
+注册开关及管理员指派仍为 `admin` 专用。Backend 会从数据库实时读取角色，
+不会永久信任旧 JWT 中缓存的角色。
 
 ### B站资料与绑定
 
 - `GET /bilibili/info`：读取站点配置 UID 的公开资料。
-- `/bilibili-binding/*`：全部要求登录；创建二维码、轮询、查看绑定、设为主账号和解绑。
+- `/bilibili-binding/*`：全部要求登录；创建二维码、轮询、查看绑定、设为主账号、重新同步和解绑。
+
+扫码完成后，Backend 会用同一进程内的临时凭证调用身份 provider；Cookie 与
+refresh token 不进入响应、数据库或日志，并在尝试结束后清除。每个绑定的公开
+状态包括粉丝勋章、大航海等级、同步状态和最后成功时间。前端提交的
+`guard_level`、目标主播 UID 或直播间 ID 不参与身份判断。
+
+以下管理接口要求 `viewer_identity.manage`。主播和管理员默认具有该能力；后端
+还会检查操作者角色、目标用户当前角色、同步状态和补录目标：
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| `GET` | `/viewer-identities/users` | 查看用户绑定与同步状态 |
+| `GET` | `/viewer-identities/users/:userId/audit` | 查看身份同步与补录记录 |
+| `POST` | `/viewer-identities/users/:userId/bindings/:uid/sync` | 重新同步一个已验证绑定 |
+| `PUT` | `/viewer-identities/users/:userId/bindings/:uid/fallback` | 为失败／待确认的观众绑定设置临时补录 |
+| `DELETE` | `/viewer-identities/users/:userId/bindings/:uid/fallback` | 撤销有权管理的临时补录 |
+
+主播只能处理四种观众角色，不能重新同步或修改主播／管理员账号，不能指派
+`streamer` 或 `admin`，也不能修改目标直播间或权限矩阵。舰长、提督和总督补录
+必须包含未来截止时间；自动同步恢复后会覆盖补录。默认 provider 仍返回稳定的
+`identity_source_not_configured`，不会伪造粉丝团结果。服务器维护者明确设置
+`VIEWER_IDENTITY_PROVIDER=guard_tab_top_list` 后，Backend 才会使用匿名完整名单
+对账；前端不能选择 provider、目标直播间、周期、超时或重试参数。
 
 ## bili-bot WebSocket 接口
 
@@ -320,7 +349,7 @@ HMAC-SHA256(
 
 数据库会保存未来明确身份映射所需的 `actor_open_id` 与可选 `actor_union_id`；二者属于平台个人识别资料，应按最小权限、备份保护和保留期限管理。日志只允许事件 ID、类型、站点、房间、模式、处理结果、脱敏错误码和耗时，不记录 open_id、union_id、弹幕/SC 正文、原始包或鉴权资料。
 
-此入口不接受网站用户 Token，不建立用户会话，不调整积分，不推送 WebSocket，不控制 OBS、播放器或酷狗，也不发送直播弹幕。Phase 4C 起，首次 `accepted` 的 `danmaku` 会在同一数据库事务中执行严格点歌观察；只有完整匹配 `点歌 歌名` 或 `點歌 歌名` 的弹幕才派生一条 `song_requests` 记录。普通弹幕、其他七类事件、`duplicate` 与 `event_id_conflict` 均不创建点歌请求。
+此入口不接受网站用户 Token，不建立用户会话，不调整积分，不推送 WebSocket，不控制 OBS、播放器或酷狗，也不发送直播弹幕。Phase 4C 起，首次 `accepted` 的 `danmaku` 会在同一数据库事务中执行严格点歌观察；只有完整匹配简体或繁体“点歌”命令的弹幕才派生一条 `song_requests` 记录。普通弹幕、其他七类事件、`duplicate` 与 `event_id_conflict` 均不创建点歌请求。
 
 ## 统一点歌 API
 
@@ -331,7 +360,7 @@ HMAC-SHA256(
 直播弹幕只接受以下完整单行格式：
 
 ```text
-^(点歌|點歌)[ \t\u3000]+(.+?)$
+^(点歌|\u9ede\u6b4c)[ \t\u3000]+(.+?)$
 ```
 
 前缀与歌名之间至少有一个半形空格、Tab 或全形空格。`点歌年轮`、`点歌：年轮`、`播放 年轮`、`我想点歌 年轮` 和空歌名均不识别。原始弹幕与原始请求歌名会保留；简繁转换只生成匹配键，不修改显示内容。
@@ -349,7 +378,7 @@ Content-Type: application/json
 {
   "site_id": "main-site",
   "room_id": "123456",
-  "query": "年輪"
+  "query": "年轮"
 }
 ```
 

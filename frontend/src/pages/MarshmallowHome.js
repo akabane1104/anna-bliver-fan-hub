@@ -1,13 +1,29 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router';
-import { authService } from '../services';
+import { authService, permissionService } from '../services';
 import BackButton from '../components/BackButton';
 import '../styles/App.css';
 import { useSiteSettings } from '../context/SiteSettingsContext';
 
 const MarshmallowHome = () => {
   const user = authService.getCurrentUser();
+  const [canManage, setCanManage] = useState(false);
   const { siteSettings } = useSiteSettings();
+
+  useEffect(() => {
+    if (!user) {
+      setCanManage(false);
+      return;
+    }
+    permissionService.getMyPermissions()
+      .then((result) => setCanManage(
+        permissionService.hasPermission(
+          result,
+          permissionService.PERMISSIONS.MARSHMALLOW_MANAGE
+        )
+      ))
+      .catch(() => setCanManage(false));
+  }, [user]);
 
   return (
     <div className="container">
@@ -32,7 +48,7 @@ const MarshmallowHome = () => {
           </div>
         </Link>
 
-        {user && user.role === 'admin' && (
+        {canManage && (
           <Link to="/admin/marshmallows" style={{ textDecoration: 'none' }}>
             <div className="card" style={{ textAlign: 'center', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', border: '2px solid var(--primary-purple)' }}>
               <div style={{ fontSize: '3rem', marginBottom: '1rem' }}>👑</div>

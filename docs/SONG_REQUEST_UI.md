@@ -5,13 +5,13 @@ Phase 4G-A 将 Phase 4C 的统一点歌队列接入现有网站。它没有建�
 ## 页面
 
 - `/playlists`：现有网页歌单，同时提供观众点歌和公开队列。
-- `/admin/song-requests`：点歌控制台，仅管理员或具有 `live_control.manage` 权限的登录用户可访问。
+- `/admin/song-requests`：点歌控制台，仅管理员、主播或具有 `live_control.manage` 权限的登录用户可访问。
 
 前台沿用网站账号 JWT。浏览器只提交 `song_id` 和 `Idempotency-Key`；请求者身份、来源、状态和队列位置全部由 Backend 决定。未登录用户仍可浏览歌单，但不能提交点歌。
 
 ## 统一队列
 
-`website`、`manual`、`bilibili_danmaku`、`simulation` 和 `replay` 都写入现有 `song_requests`。公开层只有“点歌／點歌”概念，不存在“播放”指令或第二条播放队列。`sung` 与 `played` 仅是主播处理中的内部 `fulfillment_type`。
+`website`、`manual`、`bilibili_danmaku`、`simulation` 和 `replay` 都写入现有 `song_requests`。公开层只有简体或繁体“点歌”命令，不存在“播放”指令或第二条播放队列。`sung` 与 `played` 仅是主播处理中的内部 `fulfillment_type`。
 
 公开队列只返回：
 
@@ -67,7 +67,7 @@ Phase 4G-A 将 Phase 4C 的统一点歌队列接入现有网站。它没有建�
 - “移除”等价于将合法等待请求转换为 `cancelled`，并要求二次确认。
 - reorder 必须提交场次 `expected_version` 和完整的可排序 request public ID 集合。
 - stale version 返回 409，前端重新读取服务器状态，不把冲突当作成功。
-- 所有管理 mutation 由 Backend 再次检查管理员或 `live_control.manage` 权限。
+- 所有管理 mutation 由 Backend 再次检查管理员、主播或 `live_control.manage` 权限。
 - 同一 target 的重复建立和同一 session 的重复 start、pause、resume、close 会在 Backend 权威层按资源串行化或共享结果。前端按钮 disabled 只改善操作体验，不是唯一防重边界。
 - 前端会在同步进入 action handler 时登记资源锁；失败、超时或拒绝后通过安全清理路径释放，之后可以合法重试。不同 session 不共用全局锁。
 

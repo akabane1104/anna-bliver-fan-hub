@@ -64,7 +64,7 @@ node tools/live-event-simulator/src/cli.js run `
 `all` 包含以下场景：
 
 - `simplified-request`：`点歌 年轮`。
-- `traditional-request`：`點歌 年輪`，匹配数据库原文“年轮”。
+- `traditional-request`：繁体点歌输入，匹配数据库原文“年轮”。
 - `ordinary-chat`：普通弹幕，不建立请求。
 - `playback-command-rejected`：`播放 年轮`，不建立请求。
 - `missing-space`：`点歌年轮`，不建立请求。

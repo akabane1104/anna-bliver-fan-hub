@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router';
 import { authService, permissionService } from '../services';
 import { useSiteSettings } from '../context/SiteSettingsContext';
 import BrandMark from './BrandMark';
+import { isAdminRole } from '../constants/roles';
 
 function Navbar() {
   const navigate = useNavigate();
@@ -10,6 +11,7 @@ function Navbar() {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const [user, setUser] = useState(authService.getCurrentUser());
   const [canManageLiveControl, setCanManageLiveControl] = useState(false);
+  const [canManageViewerIdentity, setCanManageViewerIdentity] = useState(false);
   const liveAdminMenuRef = useRef(null);
   const isAuthenticated = authService.isAuthenticated();
 
@@ -31,17 +33,29 @@ function Navbar() {
   useEffect(() => {
     if (!isAuthenticated || !user) {
       setCanManageLiveControl(false);
+      setCanManageViewerIdentity(false);
       return;
     }
-    if (user.role === 'admin') {
+    if (isAdminRole(user.role)) {
       setCanManageLiveControl(true);
+      setCanManageViewerIdentity(true);
       return;
     }
     permissionService.getMyPermissions()
-      .then((result) => setCanManageLiveControl(
-        result.permissions?.includes(permissionService.PERMISSIONS.LIVE_CONTROL_MANAGE)
-      ))
-      .catch(() => setCanManageLiveControl(false));
+      .then((result) => {
+        setCanManageLiveControl(
+          result.permissions?.includes(permissionService.PERMISSIONS.LIVE_CONTROL_MANAGE)
+        );
+        setCanManageViewerIdentity(
+          result.permissions?.includes(
+            permissionService.PERMISSIONS.VIEWER_IDENTITY_MANAGE
+          )
+        );
+      })
+      .catch(() => {
+        setCanManageLiveControl(false);
+        setCanManageViewerIdentity(false);
+      });
   }, [isAuthenticated, user]);
 
   const closeMenu = () => {
@@ -81,8 +95,16 @@ function Navbar() {
                     <Link to="/admin/live-status" onClick={closeMenu}>直播状态</Link>
                     <Link to="/admin/live-events" onClick={closeMenu}>事件记录</Link>
                     <Link to="/admin/song-requests" onClick={closeMenu}>点歌控制</Link>
+                    <Link to="/admin/obs-overlays" onClick={closeMenu}>OBS 元件</Link>
                   </div>
                 </details>
+              </li>
+            )}
+            {canManageViewerIdentity && (
+              <li>
+                <Link to="/admin/permissions" onClick={closeMenu}>
+                  {isAdminRole(user.role) ? '用户与权限' : '观众身份'}
+                </Link>
               </li>
             )}
             <li className="user-points"><span>积分 {user.points || 0}</span></li>

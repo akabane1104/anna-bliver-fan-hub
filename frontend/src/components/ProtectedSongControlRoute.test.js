@@ -31,7 +31,7 @@ describe('live control route authorization', () => {
     document.body.appendChild(container);
     root = createRoot(container);
     mockAuthService.isAuthenticated.mockReturnValue(true);
-    mockAuthService.getCurrentUser.mockReturnValue({ role: 'user' });
+    mockAuthService.getCurrentUser.mockReturnValue({ role: 'fan_club' });
   });
 
   afterEach(() => {

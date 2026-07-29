@@ -45,8 +45,8 @@ describe('Navbar live administration menu', () => {
     global.IS_REACT_ACT_ENVIRONMENT = true;
     jest.clearAllMocks();
     mockAuthService.isAuthenticated.mockReturnValue(true);
-    mockAuthService.getCurrentUser.mockReturnValue({ role: 'user', points: 0 });
-    mockAuthService.getProfile.mockResolvedValue({ role: 'user', points: 0 });
+    mockAuthService.getCurrentUser.mockReturnValue({ role: 'fan_club', points: 0 });
+    mockAuthService.getProfile.mockResolvedValue({ role: 'fan_club', points: 0 });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
